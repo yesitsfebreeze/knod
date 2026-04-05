@@ -1,0 +1,17 @@
+2026-04-05 21:53:10 [knod] [INF] starting with empty graph
+2026-04-05 21:53:10 [knod] [INF] [gnn] created MPNN: 3 layers, hidden=512, 5512705 params
+2026-04-05 21:53:10 [knod] [INF] starting with fresh base GNN model
+2026-04-05 21:53:10 [knod] [INF] [gnn] strand created: hidden=512, 1312768 params
+2026-04-05 21:53:10 [knod] [INF] starting with fresh strand model
+2026-04-05 21:53:10 [knod] [WRN] limbo: could not open stream, dropped thoughts will not be preserved
+2026-04-05 21:53:10 [knod] [INF] tcp: listening on :7999
+2026-04-05 21:53:10 [knod] [INF] http: listening on :8080
+2026-04-05 21:53:10 [knod] [INF] config: C:\Users\sayhe\.config\knod\config
+2026-04-05 21:53:11 [knod] [INF] provider: OpenAI (embed: text-embedding-3-small, chat: gpt-4o-mini)
+2026-04-05 21:53:11 [knod] [INF] no purpose set
+2026-04-05 21:53:11 [knod] [INF] graph: 0 thoughts, 0 edges
+2026-04-05 21:53:11 [knod] [INF] gnn base: 5512705 params, step 0
+2026-04-05 21:53:11 [knod] [INF] gnn strand: 1312768 params, step 0
+2026-04-05 21:53:11 [knod] [INF] limbo: disabled
+knod interactive mode - type /help for commands
+knod> 
