@@ -6,35 +6,50 @@ import "core:strconv"
 import "core:strings"
 import "core:time"
 
+import "../gnn"
 import "../graph"
 import "../ingest"
 import log "../logger"
 import "../provider"
+import "../util"
 
 State :: struct {
 	line_buf:   [dynamic]u8,
 	g:          ^graph.Graph,
 	p:          ^provider.Provider,
+	model:      ^gnn.MPNN,
+	strand:     ^gnn.StrandMPNN,
 	graph_path: string,
 	limbo:      ^graph.Graph,
 	quit:       bool,
+	headless:   bool,
 }
 
 init :: proc(
 	g: ^graph.Graph,
 	p: ^provider.Provider,
 	graph_path: string,
+	model: ^gnn.MPNN = nil,
+	strand: ^gnn.StrandMPNN = nil,
 	limbo_graph: ^graph.Graph = nil,
 ) -> State {
-	print_banner()
-	prompt()
+	headless := !is_console_stdin()
+	if !headless {
+		print_banner()
+		prompt()
+	} else {
+		log.info("headless mode (stdin is not a console)")
+	}
 	return State {
 		line_buf = make([dynamic]u8, 0, 1024),
 		g = g,
 		p = p,
+		model = model,
+		strand = strand,
 		graph_path = graph_path,
 		limbo = limbo_graph,
 		quit = false,
+		headless = headless,
 	}
 }
 
@@ -46,6 +61,11 @@ destroy :: proc(s: ^State) {
 poll :: proc(s: ^State) -> bool {
 	if s.quit {
 		return false
+	}
+
+	// In headless mode, never read stdin — just keep the main loop alive.
+	if s.headless {
+		return true
 	}
 
 	if !stdin_has_input() {
@@ -309,7 +329,7 @@ cmd_descriptor :: proc(s: ^State, args: string) {
 			return
 		}
 		graph.set_descriptor(s.g, name, text)
-		graph.save(s.g, s.graph_path)
+		repl_save_graph(s)
 		fmt.printf("descriptor \"%s\" saved (%d bytes)\n", name, len(text))
 
 	case "remove":
@@ -318,7 +338,7 @@ cmd_descriptor :: proc(s: ^State, args: string) {
 			return
 		}
 		if graph.remove_descriptor(s.g, rest) {
-			graph.save(s.g, s.graph_path)
+			repl_save_graph(s)
 			fmt.printf("descriptor \"%s\" removed\n", rest)
 		} else {
 			fmt.printf("descriptor \"%s\" not found\n", rest)
@@ -341,7 +361,7 @@ cmd_purpose :: proc(s: ^State, text: string) {
 	}
 
 	graph.set_purpose(s.g, text)
-	graph.save(s.g, s.graph_path)
+	repl_save_graph(s)
 	fmt.printf("purpose set to: \"%s\"\n", s.g.purpose)
 	log.info("[repl] purpose set to: \"%s\"", s.g.purpose)
 }
@@ -485,7 +505,7 @@ cmd_find :: proc(s: ^State, query: string) {
 @(private)
 cmd_save :: proc(s: ^State) {
 	fmt.printf("saving graph to %s ...\n", s.graph_path)
-	if graph.save(s.g, s.graph_path) {
+	if repl_save_graph(s) {
 		fmt.printf(
 			"saved (%d thoughts, %d edges)\n",
 			graph.thought_count(s.g),
@@ -493,6 +513,25 @@ cmd_save :: proc(s: ^State) {
 		)
 	} else {
 		fmt.println("error: failed to save graph")
+	}
+}
+
+// repl_save_graph persists the graph in the correct format based on the file extension.
+@(private)
+repl_save_graph :: proc(s: ^State) -> bool {
+	if strings.has_suffix(s.graph_path, util.STRAND_EXTENSION) {
+		strand_bytes: []u8
+		if s.strand != nil {
+			strand_bytes = gnn.strand_save_bytes(s.strand)
+		}
+		if strand_bytes == nil {
+			strand_bytes = make([]u8, 0)
+		}
+		ok := graph.save_strand(s.g, strand_bytes, s.graph_path)
+		delete(strand_bytes)
+		return ok
+	} else {
+		return graph.save(s.g, s.graph_path)
 	}
 }
 
@@ -560,8 +599,17 @@ when ODIN_OS == .Windows {
 	foreign kernel32 {
 		GetStdHandle :: proc(nStdHandle: DWORD) -> HANDLE ---
 		GetNumberOfConsoleInputEvents :: proc(hConsoleInput: HANDLE, lpcNumberOfEvents: ^DWORD) -> DWORD ---
+		PeekConsoleInputW :: proc(hConsoleInput: HANDLE, lpBuffer: ^INPUT_RECORD, nLength: DWORD, lpNumberOfEventsRead: ^DWORD) -> DWORD ---
 		GetConsoleMode :: proc(hConsoleHandle: HANDLE, lpMode: ^DWORD) -> DWORD ---
 		SetConsoleMode :: proc(hConsoleHandle: HANDLE, dwMode: DWORD) -> DWORD ---
+	}
+
+	KEY_EVENT :: DWORD(0x0001)
+
+	INPUT_RECORD :: struct {
+		event_type: u16,
+		_padding:   u16,
+		event:      [16]u8, // union, we only check event_type
 	}
 
 	STD_INPUT_HANDLE :: DWORD(0xFFFFFFF6)
@@ -570,10 +618,29 @@ when ODIN_OS == .Windows {
 	stdin_has_input :: proc() -> bool {
 		handle := GetStdHandle(STD_INPUT_HANDLE)
 		count: DWORD
-		if GetNumberOfConsoleInputEvents(handle, &count) != 0 {
-			return count > 1
+		if GetNumberOfConsoleInputEvents(handle, &count) == 0 || count == 0 {
+			return false
+		}
+		// Peek at events to check for actual key events (not window/focus/mouse).
+		buf: [8]INPUT_RECORD
+		peek_count: DWORD
+		n := min(DWORD(len(buf)), count)
+		if PeekConsoleInputW(handle, &buf[0], n, &peek_count) == 0 {
+			return false
+		}
+		for i in 0 ..< peek_count {
+			if buf[i].event_type == u16(KEY_EVENT) {
+				return true
+			}
 		}
 		return false
+	}
+
+	@(private)
+	is_console_stdin :: proc() -> bool {
+		handle := GetStdHandle(STD_INPUT_HANDLE)
+		mode: DWORD
+		return GetConsoleMode(handle, &mode) != 0
 	}
 } else {
 	foreign import libc "system:c"
@@ -589,6 +656,7 @@ when ODIN_OS == .Windows {
 	@(default_calling_convention = "c")
 	foreign libc {
 		poll :: proc(fds: ^pollfd, nfds: u64, timeout: i32) -> i32 ---
+		isatty :: proc(fd: i32) -> i32 ---
 	}
 
 	@(private)
@@ -600,5 +668,10 @@ when ODIN_OS == .Windows {
 		}
 		result := poll(&pfd, 1, 0)
 		return result > 0 && (pfd.revents & POLLIN) != 0
+	}
+
+	@(private)
+	is_console_stdin :: proc() -> bool {
+		return isatty(0) != 0
 	}
 }

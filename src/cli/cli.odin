@@ -9,10 +9,12 @@ import "core:strings"
 import "../gnn"
 import "../graph"
 import "../registry"
+import "../util"
 
-GRAPH_MAGIC :: 0x6B6E6F67
-GRAPH_VERSION :: i32(1)
-KNOD_MAGIC :: 0x6B6E6F64
+// Use graph's canonical constants instead of local redefinitions.
+GRAPH_MAGIC :: graph.LOG_MAGIC
+GRAPH_VERSION :: graph.LOG_VERSION
+KNOD_MAGIC :: graph.KNOD_MAGIC
 
 Action :: enum {
 	RUN,
@@ -24,6 +26,7 @@ Command :: struct {
 	action:     Action,
 	knid_scope: string,
 	query:      string,
+	no_limbo:   bool,
 }
 
 parse_and_dispatch :: proc() -> Command {
@@ -52,6 +55,8 @@ parse_and_dispatch :: proc() -> Command {
 			graph_path = arg[8:]
 		} else if strings.has_prefix(arg, "--query=") {
 			query_text = arg[8:]
+		} else if arg == "--no-limbo" || arg == "-nl" {
+			cmd.no_limbo = true
 		} else {
 			append(&filtered, arg)
 		}
@@ -463,7 +468,7 @@ cmd_internal_query :: proc(graph_path, query_text: string) {
 	graph.create(&g)
 	defer graph.release(&g)
 
-	is_strand := strings.has_suffix(graph_path, ".strand")
+	is_strand := strings.has_suffix(graph_path, util.STRAND_EXTENSION)
 	strand_data: []u8
 	strand_offset := 0
 	loaded := false
@@ -590,7 +595,7 @@ cmd_internal_query :: proc(graph_path, query_text: string) {
 
 	for er in edge_results {
 		edge := &g.edges[er.edge_index]
-		edge_score := er.score * 0.8
+		edge_score := er.score * util.EDGE_SCORE_DISCOUNT
 
 		src_existing, src_found := seen[edge.source_id]
 		if !src_found || edge_score > src_existing {
@@ -748,7 +753,11 @@ gnn_checkpoint_path :: proc(graph_path_arg: string) -> string {
 
 
 print_usage :: proc() {
-	fmt.println("usage: knod [--knid=<name>] <command>")
+	fmt.println("usage: knod [options] <command>")
+	fmt.println("")
+	fmt.println("options:")
+	fmt.println("  --knid=<name>              scope to a named collection")
+	fmt.println("  --no-limbo, -nl            disable the limbo holding graph")
 	fmt.println("")
 	fmt.println("commands:")
 	fmt.println("  (none)                     start the main process")
@@ -1038,24 +1047,12 @@ write_val :: proc(fd: os.Handle, val: ^$T) -> bool {
 
 @(private)
 home_dir :: proc() -> string {
-	home := os.get_env("USERPROFILE")
-	if len(home) == 0 {
-		home = os.get_env("HOME")
-	}
-	return home
+	return util.home_dir()
 }
 
 @(private)
 ensure_dir :: proc(path: string) {
-	if os.exists(path) {
-		return
-	}
-	parent := filepath.dir(path)
-	if len(parent) > 0 && parent != path {
-		defer delete(parent)
-		ensure_dir(parent)
-	}
-	os.make_directory(path)
+	util.ensure_dir(path)
 }
 
 @(private)

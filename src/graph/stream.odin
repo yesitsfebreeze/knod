@@ -3,6 +3,8 @@ package graph
 import "core:os"
 import "core:strings"
 
+import "../util"
+
 stream_thought :: proc(fd: os.Handle, t: ^Thought) -> bool {
 	rt := RecordType.THOUGHT
 	if !write_val(fd, &rt) {return false}
@@ -38,7 +40,7 @@ stream_edge :: proc(fd: os.Handle, e: ^Edge) -> bool {
 
 stream_open :: proc(g: ^Graph, path: string) -> bool {
 	exists := os.exists(path)
-	is_strand := strings.has_suffix(path, ".strand")
+	is_strand := strings.has_suffix(path, util.STRAND_EXTENSION)
 
 	flags := os.O_WRONLY | os.O_CREATE | os.O_APPEND
 	fd, err := os.open(path, flags, 0o644)

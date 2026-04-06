@@ -1,6 +1,9 @@
 bin/
 build/
+corpus/
 
 *.exe
+*.txt
+__pycache__/
 .ruff_cache/
 .timmy

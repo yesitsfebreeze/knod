@@ -1,7 +1,8 @@
 package gnn
 
+import "../graph"
 
-EMBEDDING_DIM :: 1536 // must match graph.EMBEDDING_DIM
+EMBEDDING_DIM :: graph.EMBEDDING_DIM
 
 // Architecture defaults
 DEFAULT_HIDDEN_DIM :: 512

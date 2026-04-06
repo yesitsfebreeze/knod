@@ -11,6 +11,7 @@ import "../graph"
 import log "../logger"
 import "../provider"
 import "../registry"
+import "../util"
 
 Config :: struct {
 	max_similar:        int,
@@ -565,20 +566,10 @@ store_path_for :: proc(name: string) -> string {
 
 @(private = "file")
 home_dir_ingest :: proc() -> string {
-	home := os.get_env("USERPROFILE")
-	if len(home) == 0 {
-		home = os.get_env("HOME")
-	}
-	return home
+	return util.home_dir()
 }
 
 @(private = "file")
 ensure_dir :: proc(path: string) {
-	if os.exists(path) {return}
-	parent := filepath.dir(path)
-	if len(parent) > 0 && parent != path {
-		defer delete(parent)
-		ensure_dir(parent)
-	}
-	os.make_directory(path)
+	util.ensure_dir(path)
 }

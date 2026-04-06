@@ -5,6 +5,8 @@ import "core:path/filepath"
 import "core:strconv"
 import "core:strings"
 
+import "../util"
+
 Config :: struct {
 	// Provider
 	api_key:              string,
@@ -97,11 +99,7 @@ config_dir :: proc() -> string {
 
 @(private)
 home_dir :: proc() -> string {
-	home := os.get_env("USERPROFILE")
-	if len(home) == 0 {
-		home = os.get_env("HOME")
-	}
-	return home
+	return util.home_dir()
 }
 
 load :: proc() -> (cfg: Config, ok: bool) {
@@ -308,14 +306,5 @@ write_default :: proc() -> string {
 
 @(private)
 ensure_dir :: proc(path: string) {
-	if os.exists(path) {
-		return
-	}
-
-	parent := filepath.dir(path)
-	if len(parent) > 0 && parent != path {
-		ensure_dir(parent)
-	}
-
-	os.make_directory(path)
+	util.ensure_dir(path)
 }

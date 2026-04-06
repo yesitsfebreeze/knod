@@ -219,14 +219,12 @@ _handle_ask_body :: proc(user_data: rawptr, body: http.Body, err: http.Body_Erro
 	sync.unlock(&ctx.h.mu)
 
 	res := ctx.res
+	res.status = .OK
 	if ok {
-		res.status = .OK
 		http.body_set(res, answer)
 		delete(answer)
-	} else {
-		res.status = .OK
-		http.body_set(res, "I don't have enough knowledge to answer that.")
 	}
+	// no body when ask has no useful results — silence, not noise
 	http.respond(res)
 }
 

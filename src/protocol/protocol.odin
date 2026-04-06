@@ -7,6 +7,7 @@ import "../graph"
 import "../ingest"
 import log "../logger"
 import "../provider"
+import "../util"
 
 Handler :: struct {
 	g:                    ^graph.Graph,
@@ -100,7 +101,7 @@ handle_ask :: proc(h: ^Handler, query: string) -> (answer: string, ok: bool) {
 		return "", false
 	}
 
-	K :: 10
+	K := graph.cfg.default_find_k
 
 	seen: map[u64]f32
 	defer delete(seen)
@@ -138,7 +139,7 @@ handle_ask :: proc(h: ^Handler, query: string) -> (answer: string, ok: bool) {
 
 	for er in edge_results {
 		edge := &h.g.edges[er.edge_index]
-		edge_score := er.score * 0.8
+		edge_score := er.score * util.EDGE_SCORE_DISCOUNT
 
 		src_existing, src_found := seen[edge.source_id]
 		if !src_found || edge_score > src_existing {
@@ -183,7 +184,7 @@ handle_ask :: proc(h: ^Handler, query: string) -> (answer: string, ok: bool) {
 
 	edge_context_count := 0
 	for er in edge_results {
-		if edge_context_count >= 3 {break}
+		if edge_context_count >= graph.cfg.max_context_edges {break}
 		edge := &h.g.edges[er.edge_index]
 		if len(edge.reasoning) > 0 {
 			append(&context_parts, edge.reasoning)
@@ -215,7 +216,7 @@ handle_ask :: proc(h: ^Handler, query: string) -> (answer: string, ok: bool) {
 // For other files, it writes the raw graph format.
 @(private)
 save_graph :: proc(h: ^Handler) {
-	if strings.has_suffix(h.graph_path, ".strand") {
+	if strings.has_suffix(h.graph_path, util.STRAND_EXTENSION) {
 		strand_bytes := gnn.strand_save_bytes(h.strand)
 		if strand_bytes == nil {
 			strand_bytes = make([]u8, 0)

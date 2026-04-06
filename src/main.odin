@@ -18,6 +18,7 @@ import "protocol"
 import "provider"
 import "registry"
 import "repl"
+import "util"
 
 main :: proc() {
 	cmd := cli.parse_and_dispatch()
@@ -94,7 +95,7 @@ main :: proc() {
 	graph.create(&g)
 	defer graph.release(&g)
 
-	is_strand_file := strings.has_suffix(graph_path, ".strand")
+	is_strand_file := strings.has_suffix(graph_path, util.STRAND_EXTENSION)
 
 	if is_strand_file {
 		// .strand container format: load graph data from the SECTION_GRAPH block.
@@ -175,9 +176,16 @@ main :: proc() {
 	limbo_g: graph.Graph
 	limbo_path := registry.limbo_path()
 	defer delete(limbo_path)
-	limbo_enabled := c.limbo_cluster_min > 0
+	limbo_enabled := c.limbo_cluster_min > 0 && !cmd.no_limbo
 
 	if limbo_enabled {
+		// Ensure the limbo data directory exists.
+		{
+			limbo_dir := filepath.dir(limbo_path)
+			ensure_data_dir(limbo_dir)
+			delete(limbo_dir)
+		}
+
 		graph.create(&limbo_g)
 		defer graph.release(&limbo_g)
 
@@ -205,7 +213,7 @@ main :: proc() {
 			max_tags = c.max_tags,
 			min_link_weight = c.min_link_weight,
 			limbo_graph = limbo_enabled ? &limbo_g : nil,
-			limbo_threshold = 0.75,
+			limbo_threshold = util.LIMBO_THRESHOLD,
 		},
 	}
 
@@ -243,7 +251,7 @@ main :: proc() {
 		log.info("limbo: disabled")
 	}
 
-	repl_state := repl.init(&g, &p, graph_path, limbo_enabled ? &limbo_g : nil)
+	repl_state := repl.init(&g, &p, graph_path, &gnn_model, &strand_model, limbo_enabled ? &limbo_g : nil)
 	defer repl.destroy(&repl_state)
 
 	LIMBO_SCAN_INTERVAL :: 60 * time.Second
@@ -257,7 +265,7 @@ main :: proc() {
 		protocol.tcp_poll(&tcp)
 
 		if limbo_enabled && time.since(last_limbo_scan) >= LIMBO_SCAN_INTERVAL {
-			ingest.scan_limbo(&limbo_g, limbo_path, &p, c.limbo_cluster_min, 0.75)
+			ingest.scan_limbo(&limbo_g, limbo_path, &p, c.limbo_cluster_min, util.LIMBO_THRESHOLD)
 			last_limbo_scan = time.now()
 		}
 

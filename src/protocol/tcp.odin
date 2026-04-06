@@ -67,9 +67,8 @@ tcp_poll :: proc(tcp: ^TCP) -> bool {
 		if ok {
 			net.send_tcp(client_socket, transmute([]u8)answer)
 			delete(answer)
-		} else {
-			net.send_tcp(client_socket, transmute([]u8)string("error: failed to process query"))
 		}
+		// no response when ask has no useful results — silence, not noise
 
 	} else if strings.has_prefix(text, DESCRIPTOR_ADD_PREFIX) {
 		payload := text[len(DESCRIPTOR_ADD_PREFIX):]

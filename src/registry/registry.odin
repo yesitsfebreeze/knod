@@ -5,6 +5,8 @@ import "core:os"
 import "core:path/filepath"
 import "core:strings"
 
+import "../util"
+
 Store :: struct {
 	name: string,
 	path: string,
@@ -236,22 +238,10 @@ knid_stores :: proc(r: ^Registry, knid_name: string) -> []^Store {
 
 @(private)
 home_dir :: proc() -> string {
-	home := os.get_env("USERPROFILE")
-	if len(home) == 0 {
-		home = os.get_env("HOME")
-	}
-	return home
+	return util.home_dir()
 }
 
 @(private)
 ensure_dir :: proc(path: string) {
-	if os.exists(path) {
-		return
-	}
-	parent := filepath.dir(path)
-	if len(parent) > 0 && parent != path {
-		defer delete(parent)
-		ensure_dir(parent)
-	}
-	os.make_directory(path)
+	util.ensure_dir(path)
 }
