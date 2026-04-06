@@ -6,6 +6,8 @@ Matches FLOW.md Q_MERGE:
              GNN only:   0.5·cos + 0.5·gnn
              Cosine only: cos
   Q_BST — Access boost: +log1p·0.02 freq  +0.05·exp recency
+  Q_THR — Adaptive threshold: scale between floor (0.2) and configured max
+             based on graph maturity and query-level match quality
   Q_DED — Deduplicate across specialists: best score per thought text
 """
 
@@ -14,6 +16,31 @@ import time as _time
 
 from ..config import Config
 from ..specialist.graph import Graph, Thought
+
+SIMILARITY_FLOOR = 0.2
+
+
+def _effective_threshold(cos: dict[int, float], graph: Graph, cfg: Config) -> float:
+	"""Scale similarity threshold between FLOOR and cfg value.
+
+	Two factors drive the scaling:
+	  1. Graph maturity — young graphs get a lower bar.
+	  2. Query match quality — when the best cosine score is weak,
+	     the threshold drops proportionally so sparse topics still surface.
+	"""
+	mat = graph.maturity  # 0..1, reaches 1 at 50 thoughts
+
+	# Best raw cosine score for this query
+	best_cos = max(cos.values()) if cos else 0.0
+
+	# Query-level factor: if the best match is below the threshold,
+	# lerp toward the floor so *something* can get through.
+	# When best_cos >= threshold the factor is 1.0 (no relaxation).
+	query_factor = min(best_cos / cfg.similarity_threshold, 1.0) if cfg.similarity_threshold > 0 else 1.0
+
+	# Combined: both factors independently pull the threshold down
+	combined = mat * query_factor
+	return SIMILARITY_FLOOR + (cfg.similarity_threshold - SIMILARITY_FLOOR) * combined
 
 
 def merge(
@@ -27,6 +54,10 @@ def merge(
 	now = _time.time()
 	has_gnn = bool(gnn)
 	has_edges = bool(edg)
+
+	# Q_THR — adaptive threshold
+	threshold = _effective_threshold(cos, graph, cfg)
+
 	combined = []
 
 	for tid in graph.thought_ids_ordered():
@@ -53,7 +84,7 @@ def merge(
 			recency_boost = 0.05 * math.exp(-age_hours / 24.0)
 		score += min(freq_boost + recency_boost, 0.1)
 
-		if score >= cfg.similarity_threshold:
+		if score >= threshold:
 			combined.append((t, score))
 
 	combined.sort(key=lambda x: x[1], reverse=True)

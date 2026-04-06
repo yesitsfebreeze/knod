@@ -37,15 +37,21 @@ class Config:
 	# Limbo
 	limbo_scan_interval: float = 60.0  # seconds between scans
 	limbo_cluster_min: int = 3  # minimum cluster size to promote
-	limbo_cluster_threshold: float = 0.75  # cosine threshold for clustering
+	limbo_cluster_threshold: float = 0.50  # cosine threshold for clustering
 	specialist_match_threshold: float = 0.8
+
+	# Confidence gating
+	confidence_threshold: float = 0.85  # merged score above which LLM generation is skipped
+
+	# Query routing
+	query_routing_threshold: float = 0.3  # min profile similarity to include specialist in query
 
 	# Server
 	tcp_port: int = 7999
 	http_port: int = 8080
 
 	# Paths
-	graph_path: str = "knod.graph"
+	graph_path: str = ".knod/knod.knod"
 
 	@classmethod
 	def load(cls) -> "Config":
@@ -93,6 +99,8 @@ class Config:
 				"limbo_scan_interval",
 				"limbo_cluster_threshold",
 				"specialist_match_threshold",
+				"query_routing_threshold",
+				"confidence_threshold",
 			):
 				if key in kv:
 					setattr(cfg, key, float(kv[key]))

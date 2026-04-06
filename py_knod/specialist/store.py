@@ -1,5 +1,22 @@
-"""Persistence — save/load graph + model checkpoints + append-only binary log."""
+"""Persistence — save/load graph + model checkpoints + append-only binary log.
 
+.knod unified format:
+  [magic: 4 bytes "knod" = 0x6b6e6f64]
+  [version: 4 bytes LE i32]  — version 2 = Python format
+  [section]*:
+    [tag: 1 byte]
+    [length: 8 bytes LE i64]
+    [payload: <length> bytes]
+
+Section tags:
+  0x01 GRAPH    — pickled graph state dict
+  0x02 MODEL    — torch.save bytes (model + strand state_dict)
+  0x03 LIMBO    — pickled limbo list
+  0x04 REGISTRY — pickled registry nodes dict
+"""
+
+import io
+import logging
 import pickle
 import struct
 import time as _time
@@ -9,6 +26,17 @@ import torch
 
 from .graph import Graph, Thought, Edge, LimboThought
 from .gnn import KnodMPNN, StrandLayer
+
+log = logging.getLogger(__name__)
+
+# --- .knod format constants ---
+KNOD_MAGIC = 0x6B6E6F64   # "knod"
+KNOD_VERSION = 2
+
+SECTION_GRAPH = 0x01
+SECTION_MODEL = 0x02
+SECTION_LIMBO = 0x03
+SECTION_REGISTRY = 0x04
 
 # --- Binary log entry types ---
 _LOG_THOUGHT = 1
@@ -148,6 +176,7 @@ def save_graph(graph: Graph, path: str | Path):
 		"descriptors": graph.descriptors,
 		"next_id": graph._next_id,
 		"profile": graph._profile,
+		"registry_nodes": graph._registry_nodes,
 		"max_thoughts": graph.max_thoughts,
 		"max_edges": graph.max_edges,
 		"thoughts": {
@@ -197,6 +226,7 @@ def load_graph(path: str | Path) -> Graph:
 	graph.descriptors = state.get("descriptors", {})
 	graph._next_id = state["next_id"]
 	graph._profile = state.get("profile")
+	graph._registry_nodes = state.get("registry_nodes", {})
 	graph.max_thoughts = state.get("max_thoughts", 0)
 	graph.max_edges = state.get("max_edges", 0)
 
@@ -300,31 +330,227 @@ def load_strand(strand: StrandLayer, path: str | Path) -> bool:
 
 
 def save_all(graph: Graph, model: KnodMPNN, strand: StrandLayer, base_path: str | Path):
-	"""Save graph + model to base_path.graph and base_path.pt. Also updates shared base."""
+	"""Save everything to a single base_path.knod file. Also updates shared base."""
 	base = Path(base_path)
-	save_graph(graph, base.with_suffix(".graph"))
-	save_model(model, strand, base.with_suffix(".pt"))
+	save_knod(graph, model, strand, base.with_suffix(".knod"))
 	# Update the shared base model
 	save_base_model(model)
 
 
 def load_all(cfg, base_path: str | Path) -> tuple[Graph, KnodMPNN, StrandLayer]:
-	"""Load graph + model from base_path.graph and base_path.pt.
+	"""Load from base_path.knod (preferred) or fall back to legacy .graph+.pt files.
 
-	Falls back to shared base.gnn for the model weights if no per-specialist .pt exists.
+	Falls back to shared base.gnn for the model weights if no per-specialist checkpoint exists.
 	"""
 	base = Path(base_path)
+	knod_path = base.with_suffix(".knod")
 
-	graph = load_graph(base.with_suffix(".graph"))
+	if knod_path.exists():
+		return load_knod(cfg, knod_path)
 
+	# Legacy fallback: separate .graph + .pt files
+	graph_path = base.with_suffix(".graph")
+	if graph_path.exists():
+		graph = load_graph(graph_path)
+		model = KnodMPNN(cfg)
+		strand = StrandLayer(cfg.hidden_dim)
+		pt_path = base.with_suffix(".pt")
+		if pt_path.exists():
+			load_model(model, strand, pt_path)
+		else:
+			load_base_model(model)
+		return graph, model, strand
+
+	raise FileNotFoundError(f"No .knod or .graph file at {base}")
+
+
+# --- .knod unified format ---
+
+def _write_section(f, tag: int, payload: bytes):
+	"""Write a tagged section: [tag:1][length:8][payload]."""
+	f.write(struct.pack("<B", tag))
+	f.write(struct.pack("<q", len(payload)))
+	f.write(payload)
+
+
+def _graph_state(graph: Graph) -> dict:
+	"""Serialize graph to a state dict (no limbo — that's a separate section)."""
+	return {
+		"purpose": graph.purpose,
+		"descriptors": graph.descriptors,
+		"next_id": graph._next_id,
+		"profile": graph._profile,
+		"max_thoughts": graph.max_thoughts,
+		"max_edges": graph.max_edges,
+		"thoughts": {
+			tid: {
+				"text": t.text,
+				"embedding": t.embedding,
+				"source": t.source,
+				"created_at": t.created_at,
+				"access_count": t.access_count,
+				"last_accessed": t.last_accessed,
+			}
+			for tid, t in graph.thoughts.items()
+		},
+		"edges": [
+			{
+				"source_id": e.source_id,
+				"target_id": e.target_id,
+				"weight": e.weight,
+				"reasoning": e.reasoning,
+				"embedding": e.embedding,
+				"created_at": e.created_at,
+			}
+			for e in graph.edges
+		],
+	}
+
+
+def _model_bytes(model: KnodMPNN, strand: StrandLayer) -> bytes:
+	"""Serialize model + strand state_dict to bytes via torch.save."""
+	buf = io.BytesIO()
+	torch.save({"model": model.state_dict(), "strand": strand.state_dict()}, buf)
+	return buf.getvalue()
+
+
+def save_knod(graph: Graph, model: KnodMPNN, strand: StrandLayer, path: str | Path):
+	"""Save graph + model + limbo + registry into a single .knod file."""
+	path = Path(path)
+	path.parent.mkdir(parents=True, exist_ok=True)
+
+	with open(path, "wb") as f:
+		# Header
+		f.write(struct.pack("<i", KNOD_MAGIC))
+		f.write(struct.pack("<i", KNOD_VERSION))
+
+		# GRAPH section
+		_write_section(f, SECTION_GRAPH, pickle.dumps(_graph_state(graph)))
+
+		# MODEL section
+		_write_section(f, SECTION_MODEL, _model_bytes(model, strand))
+
+		# LIMBO section (only if non-empty)
+		if graph.limbo:
+			limbo_data = [
+				{"text": lt.text, "embedding": lt.embedding, "source": lt.source, "created_at": lt.created_at}
+				for lt in graph.limbo
+			]
+			_write_section(f, SECTION_LIMBO, pickle.dumps(limbo_data))
+
+		# REGISTRY section (only if non-empty)
+		if graph._registry_nodes:
+			_write_section(f, SECTION_REGISTRY, pickle.dumps(graph._registry_nodes))
+
+	# Clear legacy append log if present
+	GraphLog(path).clear()
+
+
+def load_knod(cfg, path: str | Path) -> tuple[Graph, KnodMPNN, StrandLayer]:
+	"""Load graph + model + limbo from a single .knod file."""
+	path = Path(path)
+
+	with open(path, "rb") as f:
+		data = f.read()
+
+	if len(data) < 8:
+		raise ValueError(f"File too small: {path}")
+
+	magic = struct.unpack_from("<i", data, 0)[0]
+	version = struct.unpack_from("<i", data, 4)[0]
+
+	if magic != KNOD_MAGIC:
+		raise ValueError(f"Bad magic in {path}: 0x{magic:08x}")
+
+	if version != KNOD_VERSION:
+		raise ValueError(f"Unsupported .knod version {version} in {path}")
+
+	# Parse sections
+	graph_state = None
+	model_bytes = None
+	limbo_data = None
+	registry_nodes = None
+
+	off = 8
+	while off < len(data):
+		if off + 9 > len(data):
+			break
+		tag = data[off]
+		off += 1
+		length = struct.unpack_from("<q", data, off)[0]
+		off += 8
+		payload = data[off : off + length]
+		off += length
+
+		if tag == SECTION_GRAPH:
+			graph_state = pickle.loads(payload)
+		elif tag == SECTION_MODEL:
+			model_bytes = payload
+		elif tag == SECTION_LIMBO:
+			limbo_data = pickle.loads(payload)
+		elif tag == SECTION_REGISTRY:
+			registry_nodes = pickle.loads(payload)
+		# else: skip unknown sections
+
+	if graph_state is None:
+		raise ValueError(f"No GRAPH section in {path}")
+
+	# Reconstruct graph
+	graph = Graph(purpose=graph_state["purpose"])
+	graph.descriptors = graph_state.get("descriptors", {})
+	graph._next_id = graph_state["next_id"]
+	graph._profile = graph_state.get("profile")
+	graph.max_thoughts = graph_state.get("max_thoughts", 0)
+	graph.max_edges = graph_state.get("max_edges", 0)
+
+	for tid_str, tdata in graph_state["thoughts"].items():
+		tid = int(tid_str) if isinstance(tid_str, str) else tid_str
+		graph.thoughts[tid] = Thought(
+			id=tid,
+			text=tdata["text"],
+			embedding=tdata["embedding"],
+			source=tdata.get("source", ""),
+			created_at=tdata.get("created_at", 0),
+			access_count=tdata.get("access_count", 0),
+			last_accessed=tdata.get("last_accessed", 0.0),
+		)
+
+	for edata in graph_state["edges"]:
+		graph.edges.append(
+			Edge(
+				source_id=edata["source_id"],
+				target_id=edata["target_id"],
+				weight=edata["weight"],
+				reasoning=edata["reasoning"],
+				embedding=edata["embedding"],
+				created_at=edata.get("created_at", 0),
+			)
+		)
+
+	if limbo_data:
+		for ldata in limbo_data:
+			graph.limbo.append(
+				LimboThought(
+					text=ldata["text"],
+					embedding=ldata["embedding"],
+					source=ldata.get("source", ""),
+					created_at=ldata.get("created_at", 0),
+				)
+			)
+
+	if registry_nodes:
+		graph._registry_nodes = registry_nodes
+
+	# Reconstruct model
 	model = KnodMPNN(cfg)
 	strand = StrandLayer(cfg.hidden_dim)
 
-	pt_path = base.with_suffix(".pt")
-	if pt_path.exists():
-		load_model(model, strand, pt_path)
+	if model_bytes:
+		buf = io.BytesIO(model_bytes)
+		checkpoint = torch.load(buf, weights_only=True)
+		model.load_state_dict(checkpoint["model"])
+		strand.load_state_dict(checkpoint["strand"])
 	else:
-		# Try shared base model
 		load_base_model(model)
 
 	return graph, model, strand

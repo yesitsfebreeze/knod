@@ -25,10 +25,6 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger("learn")
 
 from py_knod.config import Config
-from py_knod.specialist.graph import Graph
-from py_knod.specialist.store import save_graph, load_graph, save_model, load_model
-from py_knod.specialist import KnodMPNN, StrandLayer, GNNTrainer
-from py_knod.ingest import Ingester
 from py_knod.handler import Handler
 
 # --- Wikipedia categories to sample from ---
@@ -64,8 +60,8 @@ CATEGORIES = [
 	"Island_ecology",
 ]
 
-GRAPH_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "bin", "data", "test_edges.graph")
-MODEL_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "bin", "data", "test_edges.pt")
+GRAPH_DIR = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "..", "bin", "data"))
+GRAPH_BASE = os.path.join(GRAPH_DIR, "test_edges")  # .graph / .pt added by save_all
 MAX_CHARS = 20_000
 UA = "knod-learner/1.0 (educational project; contact: none)"
 
@@ -141,25 +137,18 @@ def main():
 	args = parser.parse_args()
 
 	cfg = Config.load()
-	handler = Handler(cfg)
+	# Point graph_path at our persistent store
+	cfg.graph_path = GRAPH_BASE + ".graph"
+	os.makedirs(GRAPH_DIR, exist_ok=True)
 
-	if not args.fresh and os.path.exists(GRAPH_PATH):
-		log.info("Loading persisted graph from %s", GRAPH_PATH)
-		handler.graph = load_graph(GRAPH_PATH)
-		handler.model = KnodMPNN(cfg)
-		handler.strand = StrandLayer(cfg.hidden_dim)
-		if os.path.exists(MODEL_PATH):
-			load_model(handler.model, handler.strand, MODEL_PATH)
-		handler.trainer = GNNTrainer(handler.model, handler.strand, cfg)
-		handler.ingester = Ingester(handler.graph, handler.provider, cfg)
-		log.info("Loaded: %d thoughts, %d edges", handler.graph.num_thoughts, handler.graph.num_edges)
-	else:
-		log.info("Starting fresh graph")
-		handler.graph = Graph()
-		handler.model = KnodMPNN(cfg)
-		handler.strand = StrandLayer(cfg.hidden_dim)
-		handler.trainer = GNNTrainer(handler.model, handler.strand, cfg)
-		handler.ingester = Ingester(handler.graph, handler.provider, cfg)
+	if args.fresh:
+		for ext in (".graph", ".pt"):
+			p = GRAPH_BASE + ext
+			if os.path.exists(p):
+				os.remove(p)
+
+	handler = Handler(cfg)
+	handler.init()
 
 	seen = set(t.source for t in handler.graph.thoughts.values())
 	round_num = 0
@@ -190,25 +179,23 @@ def main():
 			print(f"\n--- Round {round_num} ---")
 			print(f"  Article: {title} ({len(text):,} chars)")
 
+			before_t = handler.graph.num_thoughts
+			before_e = handler.graph.num_edges
 			t0 = time.time()
-			r = handler.handle_ingest(text, source=title)
+			handler.handle_ingest(text, source=title)
 			dt = time.time() - t0
-			new_thoughts = r["thoughts"]
-			new_edges = r["edges"]
+			new_thoughts = handler.graph.num_thoughts - before_t
+			new_edges = handler.graph.num_edges - before_e
 			total_new += new_thoughts
 
 			g = handler.graph
 			print(f"  Ingested: +{new_thoughts} thoughts, +{new_edges} edges ({dt:.1f}s)")
 			print(f"  Graph:    {g.num_thoughts} thoughts, {g.num_edges} edges, maturity={g.maturity:.3f}")
 
-			# Save after each article
-			os.makedirs(os.path.dirname(GRAPH_PATH), exist_ok=True)
-			save_graph(g, GRAPH_PATH)
-			save_model(handler.model, handler.strand, MODEL_PATH)
-
 	except KeyboardInterrupt:
 		print("\n\nStopping...")
 
+	handler.save()
 	print(f"\n{'=' * 60}")
 	print(f"  DONE — {round_num} rounds, +{total_new} thoughts ingested")
 	print(f"  Final: {handler.graph.num_thoughts} thoughts, {handler.graph.num_edges} edges")

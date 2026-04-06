@@ -15,6 +15,8 @@ from .store import (
 	load_strand,
 	save_all,
 	load_all,
+	save_knod,
+	load_knod,
 )
 
 __all__ = [
@@ -36,4 +38,6 @@ __all__ = [
 	"load_strand",
 	"save_all",
 	"load_all",
+	"save_knod",
+	"load_knod",
 ]

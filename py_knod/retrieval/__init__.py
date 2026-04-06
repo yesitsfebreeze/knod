@@ -7,7 +7,7 @@ answer.py — Q_CTX context assembly + access tracking, Q_LLM answer generation
 
 from .score import cosine_scores, edge_scores, gnn_scores
 from .merge import merge, deduplicate
-from .answer import answer
+from .answer import answer, synthesize_direct
 
 __all__ = [
 	"cosine_scores",
@@ -16,4 +16,5 @@ __all__ = [
 	"merge",
 	"deduplicate",
 	"answer",
+	"synthesize_direct",
 ]
