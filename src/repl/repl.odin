@@ -1,6 +1,5 @@
 package repl
 
-import "core:fmt"
 import "core:os"
 import "core:strconv"
 import "core:strings"
@@ -108,7 +107,7 @@ poll :: proc(s: ^State) -> bool {
 @(private)
 dispatch :: proc(s: ^State, line: string) {
 	if line[0] != '/' {
-		fmt.println("(hint: prefix with /ingest to ingest, or /ask to query)")
+		log.raw("(hint: prefix with /ingest to ingest, or /ask to query)\n")
 		return
 	}
 
@@ -149,54 +148,54 @@ dispatch :: proc(s: ^State, line: string) {
 	case "/quit", "/q":
 		cmd_quit(s)
 	case:
-		fmt.printf("unknown command: %s (type /help for a list)\n", cmd)
+		log.rawf("unknown command: %s (type /help for a list)\n", cmd)
 	}
 }
 
 
 @(private)
 cmd_help :: proc() {
-	fmt.println("commands:")
-	fmt.println("  /help,       /h  - show this help")
-	fmt.println("  /status,     /s  - graph stats and purpose")
-	fmt.println("  /ask,        /a  - query the knowledge graph")
-	fmt.println("  /ingest,     /i  - ingest text (optional: -d <name>)")
-	fmt.println("  /descriptor, /d  - manage descriptors (add/remove/list)")
-	fmt.println("  /purpose,    /p  - view or set the node's purpose")
-	fmt.println("  /thoughts,   /t  - list thoughts (optional: count)")
-	fmt.println("  /edges,      /e  - list edges (optional: thought id)")
-	fmt.println("  /find,       /f  - find thoughts by similarity")
-	fmt.println("  /save            - force-save the full graph")
-	fmt.println("  /limbo,      /l  - show limbo stats")
-	fmt.println("  /quit,       /q  - exit knod")
+	log.raw("commands:\n")
+	log.raw("  /help,       /h  - show this help\n")
+	log.raw("  /status,     /s  - graph stats and purpose\n")
+	log.raw("  /ask,        /a  - query the knowledge graph\n")
+	log.raw("  /ingest,     /i  - ingest text (optional: -d <name>)\n")
+	log.raw("  /descriptor, /d  - manage descriptors (add/remove/list)\n")
+	log.raw("  /purpose,    /p  - view or set the node's purpose\n")
+	log.raw("  /thoughts,   /t  - list thoughts (optional: count)\n")
+	log.raw("  /edges,      /e  - list edges (optional: thought id)\n")
+	log.raw("  /find,       /f  - find thoughts by similarity\n")
+	log.raw("  /save            - force-save the full graph\n")
+	log.raw("  /limbo,      /l  - show limbo stats\n")
+	log.raw("  /quit,       /q  - exit knod\n")
 }
 
 @(private)
 cmd_status :: proc(s: ^State) {
 	tc := graph.thought_count(s.g)
 	ec := graph.edge_count(s.g)
-	fmt.printf("thoughts: %d\n", tc)
-	fmt.printf("edges:    %d\n", ec)
+	log.rawf("thoughts: %d\n", tc)
+	log.rawf("edges:    %d\n", ec)
 	if len(s.g.purpose) > 0 {
-		fmt.printf("purpose:  \"%s\"\n", s.g.purpose)
+		log.rawf("purpose:  \"%s\"\n", s.g.purpose)
 	} else {
-		fmt.println("purpose:  (not set)")
+		log.raw("purpose:  (not set)\n")
 	}
-	fmt.printf("graph:    %s\n", s.graph_path)
+	log.rawf("graph:    %s\n", s.graph_path)
 }
 
 @(private)
 cmd_ask :: proc(s: ^State, query: string) {
 	if len(query) == 0 {
-		fmt.println("usage: /ask <question>")
+		log.raw("usage: /ask <question>\n")
 		return
 	}
 
-	fmt.printf("querying: \"%s\" ...\n", query)
+	log.rawf("querying: \"%s\" ...\n", query)
 
 	query_embedding, embed_ok := s.p.embed_text(s.p, query)
 	if !embed_ok {
-		fmt.println("error: failed to embed query")
+		log.err("failed to embed query")
 		return
 	}
 
@@ -204,7 +203,7 @@ cmd_ask :: proc(s: ^State, query: string) {
 	defer delete(results)
 
 	if len(results) == 0 {
-		fmt.println("no relevant thoughts found.")
+		log.raw("no relevant thoughts found.\n")
 		return
 	}
 
@@ -223,19 +222,19 @@ cmd_ask :: proc(s: ^State, query: string) {
 
 	answer, answer_ok := s.p.generate_answer(s.p, query, context_text)
 	if !answer_ok {
-		fmt.println("error: failed to generate answer")
+		log.err("failed to generate answer")
 		return
 	}
 	defer delete(answer)
 
-	fmt.println()
-	fmt.println(answer)
+	log.raw("\n")
+	log.rawf("%s\n", answer)
 }
 
 @(private)
 cmd_ingest :: proc(s: ^State, args: string) {
 	if len(args) == 0 {
-		fmt.println("usage: /ingest [-d <descriptor>] <text>")
+		log.raw("usage: /ingest [-d <descriptor>] <text>\n")
 		return
 	}
 
@@ -246,7 +245,7 @@ cmd_ingest :: proc(s: ^State, args: string) {
 		rest := args[3:]
 		space := strings.index(rest, " ")
 		if space < 0 {
-			fmt.println("usage: /ingest -d <descriptor> <text>")
+			log.raw("usage: /ingest -d <descriptor> <text>\n")
 			return
 		}
 		desc_name := rest[:space]
@@ -254,23 +253,23 @@ cmd_ingest :: proc(s: ^State, args: string) {
 
 		d := graph.get_descriptor(s.g, desc_name)
 		if d == nil {
-			fmt.printf("error: descriptor \"%s\" not found (use /descriptor list)\n", desc_name)
+			log.rawf("error: descriptor \"%s\" not found (use /descriptor list)\n", desc_name)
 			return
 		}
 		descriptor_text = d.text
 	}
 
 	if len(text) == 0 {
-		fmt.println("usage: /ingest [-d <descriptor>] <text>")
+		log.raw("usage: /ingest [-d <descriptor>] <text>\n")
 		return
 	}
 
-	fmt.printf("ingesting %d bytes ...\n", len(text))
+	log.rawf("ingesting %d bytes ...\n", len(text))
 	added := ingest.ingest(s.g, s.p, text, ingest.DEFAULT_CONFIG, descriptor_text)
 	if added < 0 {
-		fmt.println("error: ingestion failed")
+		log.err("ingestion failed")
 	} else {
-		fmt.printf(
+		log.rawf(
 			"added %d thoughts (total: %d thoughts, %d edges)\n",
 			added,
 			graph.thought_count(s.g),
@@ -282,7 +281,7 @@ cmd_ingest :: proc(s: ^State, args: string) {
 @(private)
 cmd_descriptor :: proc(s: ^State, args: string) {
 	if len(args) == 0 {
-		fmt.println("usage: /descriptor <add|remove|list> [name] [text]")
+		log.raw("usage: /descriptor <add|remove|list> [name] [text]\n")
 		return
 	}
 
@@ -300,52 +299,52 @@ cmd_descriptor :: proc(s: ^State, args: string) {
 	switch subcmd {
 	case "list":
 		if graph.descriptor_count(s.g) == 0 {
-			fmt.println("no descriptors.")
+			log.raw("no descriptors.\n")
 			return
 		}
-		fmt.printf("descriptors (%d):\n", graph.descriptor_count(s.g))
+		log.rawf("descriptors (%d):\n", graph.descriptor_count(s.g))
 		for _, &d in s.g.descriptors {
 			preview := d.text
 			if len(preview) > 80 {
 				preview = preview[:80]
 			}
-			fmt.printf("  %-20s  %s\n", d.name, preview)
+			log.rawf("  %-20s  %s\n", d.name, preview)
 		}
 
 	case "add":
 		if len(rest) == 0 {
-			fmt.println("usage: /descriptor add <name> <text>")
+			log.raw("usage: /descriptor add <name> <text>\n")
 			return
 		}
 		name_end := strings.index(rest, " ")
 		if name_end < 0 {
-			fmt.println("usage: /descriptor add <name> <text>")
+			log.raw("usage: /descriptor add <name> <text>\n")
 			return
 		}
 		name := rest[:name_end]
 		text := strings.trim_space(rest[name_end + 1:])
 		if len(text) == 0 {
-			fmt.println("error: descriptor text cannot be empty")
+			log.err("descriptor text cannot be empty")
 			return
 		}
 		graph.set_descriptor(s.g, name, text)
 		repl_save_graph(s)
-		fmt.printf("descriptor \"%s\" saved (%d bytes)\n", name, len(text))
+		log.rawf("descriptor \"%s\" saved (%d bytes)\n", name, len(text))
 
 	case "remove":
 		if len(rest) == 0 {
-			fmt.println("usage: /descriptor remove <name>")
+			log.raw("usage: /descriptor remove <name>\n")
 			return
 		}
 		if graph.remove_descriptor(s.g, rest) {
 			repl_save_graph(s)
-			fmt.printf("descriptor \"%s\" removed\n", rest)
+			log.rawf("descriptor \"%s\" removed\n", rest)
 		} else {
-			fmt.printf("descriptor \"%s\" not found\n", rest)
+			log.rawf("descriptor \"%s\" not found\n", rest)
 		}
 
 	case:
-		fmt.printf("unknown subcommand: %s (use add, remove, list)\n", subcmd)
+		log.rawf("unknown subcommand: %s (use add, remove, list)\n", subcmd)
 	}
 }
 
@@ -353,16 +352,16 @@ cmd_descriptor :: proc(s: ^State, args: string) {
 cmd_purpose :: proc(s: ^State, text: string) {
 	if len(text) == 0 {
 		if len(s.g.purpose) > 0 {
-			fmt.printf("purpose: \"%s\"\n", s.g.purpose)
+			log.rawf("purpose: \"%s\"\n", s.g.purpose)
 		} else {
-			fmt.println("purpose not set. usage: /purpose <text>")
+			log.raw("purpose not set. usage: /purpose <text>\n")
 		}
 		return
 	}
 
 	graph.set_purpose(s.g, text)
 	repl_save_graph(s)
-	fmt.printf("purpose set to: \"%s\"\n", s.g.purpose)
+	log.rawf("purpose set to: \"%s\"\n", s.g.purpose)
 	log.info("[repl] purpose set to: \"%s\"", s.g.purpose)
 }
 
@@ -377,11 +376,11 @@ cmd_thoughts :: proc(s: ^State, args: string) {
 
 	tc := graph.thought_count(s.g)
 	if tc == 0 {
-		fmt.println("no thoughts in graph.")
+		log.raw("no thoughts in graph.\n")
 		return
 	}
 
-	fmt.printf("thoughts (%d total, showing up to %d):\n", tc, limit)
+	log.rawf("thoughts (%d total, showing up to %d):\n", tc, limit)
 
 	count := 0
 	for id, &t in s.g.thoughts {
@@ -393,7 +392,7 @@ cmd_thoughts :: proc(s: ^State, args: string) {
 			display = t.text[:120]
 		}
 		ts := format_unix_time(t.created_at)
-		fmt.printf("  [%d] %s  %s\n", id, ts, display)
+		log.rawf("  [%d] %s  %s\n", id, ts, display)
 		count += 1
 	}
 }
@@ -402,7 +401,7 @@ cmd_thoughts :: proc(s: ^State, args: string) {
 cmd_edges :: proc(s: ^State, args: string) {
 	ec := graph.edge_count(s.g)
 	if ec == 0 {
-		fmt.println("no edges in graph.")
+		log.raw("no edges in graph.\n")
 		return
 	}
 
@@ -411,7 +410,7 @@ cmd_edges :: proc(s: ^State, args: string) {
 			id := u64(v)
 			thought := graph.get_thought(s.g, id)
 			if thought == nil {
-				fmt.printf("thought %d not found.\n", id)
+				log.rawf("thought %d not found.\n", id)
 				return
 			}
 
@@ -420,12 +419,12 @@ cmd_edges :: proc(s: ^State, args: string) {
 			inc := graph.incoming(s.g, id)
 			defer delete(inc)
 
-			fmt.printf("thought %d: \"%s\"\n", id, truncate(thought.text, 80))
+			log.rawf("thought %d: \"%s\"\n", id, truncate(thought.text, 80))
 
 			if len(out) > 0 {
-				fmt.printf("  outgoing (%d):\n", len(out))
+				log.rawf("  outgoing (%d):\n", len(out))
 				for e in out {
-					fmt.printf(
+					log.rawf(
 						"    → %d  w=%.2f  %s\n",
 						e.target_id,
 						e.weight,
@@ -434,9 +433,9 @@ cmd_edges :: proc(s: ^State, args: string) {
 				}
 			}
 			if len(inc) > 0 {
-				fmt.printf("  incoming (%d):\n", len(inc))
+				log.rawf("  incoming (%d):\n", len(inc))
 				for e in inc {
-					fmt.printf(
+					log.rawf(
 						"    ← %d  w=%.2f  %s\n",
 						e.source_id,
 						e.weight,
@@ -445,17 +444,17 @@ cmd_edges :: proc(s: ^State, args: string) {
 				}
 			}
 			if len(out) == 0 && len(inc) == 0 {
-				fmt.println("  no edges.")
+				log.raw("  no edges.\n")
 			}
 			return
 		}
 	}
 
 	limit := min(ec, 20)
-	fmt.printf("edges (%d total, showing %d):\n", ec, limit)
+	log.rawf("edges (%d total, showing %d):\n", ec, limit)
 	for i in 0 ..< limit {
 		e := s.g.edges[i]
-		fmt.printf(
+		log.rawf(
 			"  %d → %d  w=%.2f  %s\n",
 			e.source_id,
 			e.target_id,
@@ -468,20 +467,20 @@ cmd_edges :: proc(s: ^State, args: string) {
 @(private)
 cmd_find :: proc(s: ^State, query: string) {
 	if len(query) == 0 {
-		fmt.println("usage: /find <query>")
+		log.raw("usage: /find <query>\n")
 		return
 	}
 
 	if graph.thought_count(s.g) == 0 {
-		fmt.println("graph is empty - nothing to find.")
+		log.raw("graph is empty - nothing to find.\n")
 		return
 	}
 
-	fmt.printf("finding: \"%s\" ...\n", query)
+	log.rawf("finding: \"%s\" ...\n", query)
 
 	embedding, embed_ok := s.p.embed_text(s.p, query)
 	if !embed_ok {
-		fmt.println("error: failed to embed query")
+		log.err("failed to embed query")
 		return
 	}
 
@@ -489,30 +488,30 @@ cmd_find :: proc(s: ^State, query: string) {
 	defer delete(results)
 
 	if len(results) == 0 {
-		fmt.println("no results.")
+		log.raw("no results.\n")
 		return
 	}
 
-	fmt.printf("results (%d):\n", len(results))
+	log.rawf("results (%d):\n", len(results))
 	for r in results {
 		thought := graph.get_thought(s.g, r.id)
 		if thought != nil {
-			fmt.printf("  [%d] %.4f  %s\n", r.id, r.score, truncate(thought.text, 80))
+			log.rawf("  [%d] %.4f  %s\n", r.id, r.score, truncate(thought.text, 80))
 		}
 	}
 }
 
 @(private)
 cmd_save :: proc(s: ^State) {
-	fmt.printf("saving graph to %s ...\n", s.graph_path)
+	log.rawf("saving graph to %s ...\n", s.graph_path)
 	if repl_save_graph(s) {
-		fmt.printf(
+		log.rawf(
 			"saved (%d thoughts, %d edges)\n",
 			graph.thought_count(s.g),
 			graph.edge_count(s.g),
 		)
 	} else {
-		fmt.println("error: failed to save graph")
+		log.err("failed to save graph")
 	}
 }
 
@@ -537,40 +536,40 @@ repl_save_graph :: proc(s: ^State) -> bool {
 
 @(private)
 cmd_quit :: proc(s: ^State) {
-	fmt.println("shutting down ...")
+	log.raw("shutting down ...\n")
 	s.quit = true
 }
 
 @(private)
 cmd_limbo :: proc(s: ^State) {
 	if s.limbo == nil {
-		fmt.println("limbo is disabled (set limbo_cluster_min > 0 in config)")
+		log.raw("limbo is disabled (set limbo_cluster_min > 0 in config)\n")
 		return
 	}
 	tc := graph.thought_count(s.limbo)
-	fmt.printf("limbo thoughts: %d\n", tc)
+	log.rawf("limbo thoughts: %d\n", tc)
 	if tc == 0 {
-		fmt.println("(no unconnected thoughts yet)")
+		log.raw("(no unconnected thoughts yet)\n")
 		return
 	}
 	n := min(10, tc)
-	fmt.printf("latest %d thoughts in limbo:\n", n)
+	log.rawf("latest %d thoughts in limbo:\n", n)
 	i := 0
 	for _, &t in s.limbo.thoughts {
 		if i >= n {break}
-		fmt.printf("  [%d] %s\n", t.id, truncate(t.text, 80))
+		log.rawf("  [%d] %s\n", t.id, truncate(t.text, 80))
 		i += 1
 	}
 }
 
 @(private)
 prompt :: proc() {
-	fmt.print("knod> ")
+	log.raw("knod> ")
 }
 
 @(private)
 print_banner :: proc() {
-	fmt.println("knod interactive mode - type /help for commands")
+	log.raw("knod interactive mode - type /help for commands\n")
 }
 
 @(private)
@@ -586,7 +585,25 @@ format_unix_time :: proc(ts: i64) -> string {
 	t := time.unix(ts, 0)
 	y, mon, d := time.date(t)
 	h, m, _ := time.clock(t)
-	return fmt.tprintf("%4d-%02d-%02d %02d:%02d", y, mon, d, h, m)
+
+	buf: [16]u8
+	buf[0] = u8('0' + (y / 1000) % 10)
+	buf[1] = u8('0' + (y / 100) % 10)
+	buf[2] = u8('0' + (y / 10) % 10)
+	buf[3] = u8('0' + y % 10)
+	buf[4] = '-'
+	buf[5] = u8('0' + int(mon) / 10)
+	buf[6] = u8('0' + int(mon) % 10)
+	buf[7] = '-'
+	buf[8] = u8('0' + d / 10)
+	buf[9] = u8('0' + d % 10)
+	buf[10] = ' '
+	buf[11] = u8('0' + h / 10)
+	buf[12] = u8('0' + h % 10)
+	buf[13] = ':'
+	buf[14] = u8('0' + m / 10)
+	buf[15] = u8('0' + m % 10)
+	return strings.clone(string(buf[:]))
 }
 
 when ODIN_OS == .Windows {

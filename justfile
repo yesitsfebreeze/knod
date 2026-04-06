@@ -64,6 +64,7 @@ log:
 	@cat {{bin_dir}}/logs/knod.log 2>/dev/null || echo "no log file"
 
 INGEST_PORT := "7999"
+APP_PORT    := "3000"
 
 # Send text to a running ingest node
 [windows]
@@ -154,6 +155,33 @@ test-retrieval:
 [linux]
 test-retrieval:
 	python3 test_retrieval.py
+
+# Serve the app/ directory on APP_PORT (default 3000)
+[windows]
+serve:
+	@Start-Process -FilePath "python" -ArgumentList "-m http.server {{APP_PORT}} --directory app" -WindowStyle Hidden; Write-Output "app server started on http://localhost:{{APP_PORT}}"
+
+[linux]
+serve:
+	nohup python3 -m http.server {{APP_PORT}} --directory app > /dev/null 2>&1 & echo "app server started on http://localhost:{{APP_PORT}}"
+
+# Stop the app static file server
+[windows]
+stop-serve:
+	@Get-NetTCPConnection -LocalPort {{APP_PORT}} -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }; Write-Output "app server stopped"
+
+[linux]
+stop-serve:
+	pkill -f "http.server {{APP_PORT}}" && echo "app server stopped" || echo "app server not running"
+
+# Start both knod and the app file server (knod on :8080, app on :{{APP_PORT}})
+[windows]
+dev: ingest serve
+	@Write-Output "knod: http://localhost:8080  |  app: http://localhost:{{APP_PORT}}/explore.html"
+
+[linux]
+dev: ingest serve
+	@echo "knod: http://localhost:8080  |  app: http://localhost:{{APP_PORT}}/explore.html"
 
 # Clean build artifacts
 [windows]

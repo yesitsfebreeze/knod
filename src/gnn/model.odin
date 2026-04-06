@@ -654,6 +654,10 @@ adamw_step :: proc(model: ^MPNN, learning_rate: f32) {
 	model.adam_t += 1
 	t := model.adam_t
 
+	// Bias correction denominators are constant for all parameters — compute once.
+	bc1 := 1.0 - math.pow(BETA1, f32(t))
+	bc2 := 1.0 - math.pow(BETA2, f32(t))
+
 	for i in 0 ..< model.num_parameters {
 		param := model.params_memory[i]
 		grad := model.grads_memory[i]
@@ -661,8 +665,8 @@ adamw_step :: proc(model: ^MPNN, learning_rate: f32) {
 		m := BETA1 * model.m_memory[i] + (1.0 - BETA1) * grad
 		v := BETA2 * model.v_memory[i] + (1.0 - BETA2) * grad * grad
 
-		m_hat := m / (1.0 - math.pow(BETA1, f32(t)))
-		v_hat := v / (1.0 - math.pow(BETA2, f32(t)))
+		m_hat := m / bc1
+		v_hat := v / bc2
 
 		model.m_memory[i] = m
 		model.v_memory[i] = v
@@ -1150,6 +1154,10 @@ strand_adamw_step :: proc(s: ^StrandMPNN, lr: f32) {
 	s.adam_t += 1
 	t := s.adam_t
 
+	// Bias correction denominators are constant for all parameters — compute once.
+	bc1 := 1.0 - math.pow(BETA1, f32(t))
+	bc2 := 1.0 - math.pow(BETA2, f32(t))
+
 	for i in 0 ..< s.num_parameters {
 		param := s.params_memory[i]
 		grad := s.grads_memory[i]
@@ -1157,8 +1165,8 @@ strand_adamw_step :: proc(s: ^StrandMPNN, lr: f32) {
 		m := BETA1 * s.m_memory[i] + (1.0 - BETA1) * grad
 		v := BETA2 * s.v_memory[i] + (1.0 - BETA2) * grad * grad
 
-		m_hat := m / (1.0 - math.pow(BETA1, f32(t)))
-		v_hat := v / (1.0 - math.pow(BETA2, f32(t)))
+		m_hat := m / bc1
+		v_hat := v / bc2
 
 		s.m_memory[i] = m
 		s.v_memory[i] = v

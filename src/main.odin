@@ -1,6 +1,5 @@
 package knod
 
-import "core:fmt"
 import "core:mem"
 import "core:os"
 import os2 "core:os/os2"
@@ -38,11 +37,11 @@ main :: proc() {
 	if !config_ok {
 		path := cfg.write_default()
 		if len(path) > 0 {
-			fmt.printf("created default config at: %s\n", path)
-			fmt.println("edit the config file to set your api_key, then run again.")
+			log.info("created default config at: %s", path)
+			log.info("edit the config file to set your api_key, then run again.")
 			delete(path)
 		} else {
-			fmt.println("error: could not determine home directory for config file")
+			log.err("could not determine home directory for config file")
 		}
 		os.exit(1)
 	}
@@ -50,7 +49,7 @@ main :: proc() {
 
 	if len(c.api_key) == 0 {
 		config_path := cfg.config_path()
-		fmt.printf("error: api_key not set in %s\n", config_path)
+		log.err("api_key not set in %s", config_path)
 		delete(config_path)
 		os.exit(1)
 	}
@@ -71,6 +70,7 @@ main :: proc() {
 	if !filepath.is_abs(graph_path) {
 		graph_path = data_path(c.graph_path)
 	}
+	log.info("graph path: %s", graph_path)
 
 	// Ensure the parent directory exists for graph persistence.
 	{
@@ -161,8 +161,11 @@ main :: proc() {
 		log.info("starting with fresh strand model")
 		if graph.thought_count(&g) >= 2 {
 			log.info("training strand on existing graph...")
-			gnn.train_strand(&gnn_model, &strand_model, &g, gnn.STRAND_TRAIN_STEPS)
-			gnn.train_base_refine(&gnn_model, &strand_model, &g, gnn.BASE_REFINE_STEPS)
+			n := graph.thought_count(&g)
+			strand_steps := gnn.adaptive_steps(n, gnn.STRAND_TRAIN_STEPS_MAX, gnn.STRAND_TRAIN_STEPS_MIN)
+			base_steps := gnn.adaptive_steps(n, gnn.BASE_REFINE_STEPS_MAX, gnn.BASE_REFINE_STEPS_MIN)
+			gnn.train_strand(&gnn_model, &strand_model, &g, strand_steps)
+			gnn.train_base_refine(&gnn_model, &strand_model, &g, base_steps)
 			gnn.save_checkpoint(&gnn_model, base_checkpoint_path)
 			strand_bytes := gnn.strand_save_bytes(&strand_model)
 			if strand_bytes != nil {
@@ -217,15 +220,26 @@ main :: proc() {
 		},
 	}
 
+	if !protocol.handler_start_queue(&handler) {
+		log.warn("ingest queue could not start, ingestion will be synchronous")
+	}
+	defer protocol.handler_stop_queue(&handler)
+
 	tcp, tcp_ok := protocol.tcp_create(c.tcp_port, &handler)
 	if !tcp_ok {
 		os.exit(1)
 	}
 	defer protocol.tcp_destroy(&tcp)
 
-	http_proto, http_ok := protocol.http_create(c.http_port, &handler)
-	if !http_ok {
-		log.warn("http: could not start, continuing without HTTP")
+	http_ok := false
+	http_proto: protocol.HTTP
+	if !cmd.no_http {
+		http_proto, http_ok = protocol.http_create(c.http_port, &handler)
+		if !http_ok {
+			log.warn("http: could not start, continuing without HTTP")
+		}
+	} else {
+		log.info("http: disabled (--no-http)")
 	}
 	defer if http_ok {protocol.http_destroy(&http_proto)}
 
@@ -269,13 +283,14 @@ main :: proc() {
 			last_limbo_scan = time.now()
 		}
 
-		time.sleep(10 * time.Millisecond)
+		time.sleep(1 * time.Millisecond)
 	}
 }
 
 data_path :: proc(filename: string) -> string {
-	exe_dir := filepath.dir(os.args[0])
-	return filepath.join({exe_dir, "data", filename})
+	dir := util.exe_dir()
+	defer delete(dir)
+	return filepath.join({dir, "data", filename})
 }
 
 ensure_data_dir :: proc(path: string) {
@@ -295,14 +310,14 @@ handle_ask_subprocess :: proc(cmd: cli.Command) {
 
 	c, config_ok := cfg.load()
 	if !config_ok {
-		fmt.println("error: config not found. run 'knod' first to create default config.")
+		log.err("config not found. run 'knod' first to create default config.")
 		return
 	}
 	defer cfg.release(&c)
 
 	if len(c.api_key) == 0 {
 		config_path := cfg.config_path()
-		fmt.printf("error: api_key not set in %s\n", config_path)
+		log.err("api_key not set in %s", config_path)
 		delete(config_path)
 		return
 	}
@@ -321,7 +336,7 @@ handle_ask_subprocess :: proc(cmd: cli.Command) {
 
 	query_embedding, embed_ok := p.embed_text(&p, cmd.query)
 	if !embed_ok {
-		fmt.println("error: failed to embed query")
+		log.err("failed to embed query")
 		return
 	}
 
@@ -329,7 +344,7 @@ handle_ask_subprocess :: proc(cmd: cli.Command) {
 	defer cli.release_store_list(stores)
 
 	if len(stores) == 0 {
-		fmt.println("no stores registered. use 'knod new' or 'knod register' first.")
+		log.info("no stores registered. use 'knod new' or 'knod register' first.")
 		return
 	}
 
@@ -349,18 +364,20 @@ handle_ask_subprocess :: proc(cmd: cli.Command) {
 	defer delete(procs)
 
 	for i in 0 ..< len(stores) {
-		graph_arg := fmt.tprintf("--graph=%s", stores[i].path)
-		query_arg := fmt.tprintf("--query=%s", cmd.query)
+		graph_arg := strings.concatenate({"--graph=", stores[i].path})
+		defer delete(graph_arg)
+		query_arg := strings.concatenate({"--query=", cmd.query})
+		defer delete(query_arg)
 
 		stdin_r, stdin_w, pipe_err1 := os2.pipe()
 		if pipe_err1 != nil {
-			fmt.printf("error: could not create stdin pipe for store '%s'\n", stores[i].name)
+			log.err("could not create stdin pipe for store '%s'", stores[i].name)
 			continue
 		}
 
 		stdout_r, stdout_w, pipe_err2 := os2.pipe()
 		if pipe_err2 != nil {
-			fmt.printf("error: could not create stdout pipe for store '%s'\n", stores[i].name)
+			log.err("could not create stdout pipe for store '%s'", stores[i].name)
 			os2.close(stdin_r)
 			os2.close(stdin_w)
 			continue
@@ -374,7 +391,7 @@ handle_ask_subprocess :: proc(cmd: cli.Command) {
 
 		process, start_err := os2.process_start(desc)
 		if start_err != nil {
-			fmt.printf("error: could not start subprocess for store '%s'\n", stores[i].name)
+			log.err("could not start subprocess for store '%s'", stores[i].name)
 			os2.close(stdin_r)
 			os2.close(stdin_w)
 			os2.close(stdout_r)
@@ -470,7 +487,7 @@ handle_ask_subprocess :: proc(cmd: cli.Command) {
 	}
 
 	if len(all_thoughts) == 0 && len(all_edges) == 0 {
-		fmt.println("I don't have enough knowledge to answer that.")
+		log.rawf("I don't have enough knowledge to answer that.\n")
 		return
 	}
 
@@ -535,12 +552,12 @@ handle_ask_subprocess :: proc(cmd: cli.Command) {
 
 	answer, answer_ok := p.generate_answer(&p, cmd.query, context_text)
 	if !answer_ok {
-		fmt.println("error: failed to generate answer")
+		log.err("failed to generate answer")
 		return
 	}
 	defer delete(answer)
 
-	fmt.println(answer)
+	log.rawf("%s\n", answer)
 }
 
 parse_f32 :: proc(s: string) -> f32 {

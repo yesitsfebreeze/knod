@@ -1,6 +1,7 @@
 package util
 
 import "core:os"
+import os2 "core:os/os2"
 import "core:path/filepath"
 
 clone_string :: proc(s: string) -> string {
@@ -10,6 +11,17 @@ clone_string :: proc(s: string) -> string {
 	buf := make([]u8, len(s))
 	copy(buf, transmute([]u8)s)
 	return string(buf)
+}
+
+// exe_dir returns the directory containing the running executable.
+// Caller must delete the returned string.
+exe_dir :: proc() -> string {
+	exe_path, err := os2.get_executable_path(context.allocator)
+	if err != nil {
+		return ""
+	}
+	defer delete(exe_path)
+	return filepath.dir(exe_path)
 }
 
 // Return the user's home directory. Caller must delete the returned string.

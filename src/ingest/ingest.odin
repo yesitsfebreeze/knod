@@ -5,6 +5,7 @@ import "core:math"
 import "core:os"
 import "core:path/filepath"
 import "core:strings"
+import "core:thread"
 import "core:time"
 
 import "../graph"
@@ -35,6 +36,296 @@ DEFAULT_CONFIG :: Config {
 	limbo_threshold    = 0.75,
 }
 
+// A single thought that has been decomposed and embedded but not yet
+// linked into the graph.  Created by ingest_prepare, consumed by ingest_commit.
+//
+// After ingest_snapshot (phase 1.5) the candidate_* fields are populated with
+// a snapshot of the nearest neighbours at snapshot time.
+// After ingest_link (phase 1.75 — still no mutex) the links / edge_embeddings
+// fields carry the pre-computed LLM results ready for ingest_commit.
+Prepared_Thought :: struct {
+	text:            string, // cloned — caller must free
+	embedding:       graph.Embedding,
+
+	// Populated by ingest_snapshot (brief mutex, graph read-only).
+	candidate_ids:   [dynamic]u64,
+	candidate_texts: [dynamic]string, // cloned from graph
+
+	// Populated by ingest_link (no mutex, LLM calls).
+	links:           []provider.Batch_Link_Result, // nil if no candidates / failed
+	links_ok:        bool,
+	edge_embeddings: []graph.Embedding,            // parallel to valid links
+	edge_emb_ok:     bool,
+}
+
+// The result of the "prepare" phase for a single article.
+// Contains all decomposed+embedded thoughts, ready for graph insertion.
+Prepared_Article :: struct {
+	thoughts:   [dynamic]Prepared_Thought,
+	descriptor: string, // cloned — caller must free (empty string if none)
+}
+
+prepared_article_release :: proc(pa: ^Prepared_Article) {
+	for &pt in pa.thoughts {
+		delete(pt.text)
+		delete(pt.candidate_ids)
+		for s in pt.candidate_texts {delete(s)}
+		delete(pt.candidate_texts)
+		if pt.links != nil {
+			for &link in pt.links {delete(link.reasoning)}
+			delete(pt.links)
+		}
+		if pt.edge_embeddings != nil {delete(pt.edge_embeddings)}
+	}
+	delete(pa.thoughts)
+	if len(pa.descriptor) > 0 {delete(pa.descriptor)}
+}
+
+// ingest_prepare runs the LLM-heavy portion of ingestion that does NOT touch
+// the graph: decompose text into thoughts and embed each one.
+// This is safe to call from multiple threads concurrently.
+// Returns nil thoughts slice on failure.
+ingest_prepare :: proc(
+	p: ^provider.Provider,
+	text: string,
+	purpose: string,
+	descriptor: string = "",
+) -> (result: Prepared_Article, ok: bool) {
+	if len(text) == 0 {
+		return {}, false
+	}
+
+	raw_thoughts, decompose_ok := p.decompose_text(p, text, purpose, descriptor)
+	if !decompose_ok {
+		log.warn("[ingest:prepare] failed to decompose text")
+		return {}, false
+	}
+	defer delete(raw_thoughts)
+
+	log.info("[ingest:prepare] decomposed into %d candidate thoughts", len(raw_thoughts))
+
+	embeddings, embed_ok := p.embed_texts(p, raw_thoughts)
+	if !embed_ok {
+		log.warn("[ingest:prepare] failed to batch-embed thoughts")
+		for s in raw_thoughts {delete(s)}
+		return {}, false
+	}
+	defer delete(embeddings)
+
+	prepared := make([dynamic]Prepared_Thought, 0, len(raw_thoughts))
+
+	for thought_text, i in raw_thoughts {
+		append(&prepared, Prepared_Thought{
+			text      = thought_text, // take ownership — raw_thoughts slice freed, strings kept
+			embedding = embeddings[i],
+		})
+	}
+
+	log.info("[ingest:prepare] prepared %d thoughts (batch-embedded)", len(prepared))
+
+	desc := len(descriptor) > 0 ? strings.clone(descriptor) : ""
+	return Prepared_Article{thoughts = prepared, descriptor = desc}, true
+}
+
+// ingest_snapshot is a brief, graph-READ-ONLY pass that must be called under
+// the handler mutex.  For each prepared thought it finds the nearest existing
+// neighbours and clones their IDs and texts into the Prepared_Thought so that
+// the subsequent ingest_link phase can call the LLM without holding any mutex.
+ingest_snapshot :: proc(g: ^graph.Graph, pa: ^Prepared_Article, c: Config = DEFAULT_CONFIG) {
+	for &pt in pa.thoughts {
+		if graph.thought_count(g) < 1 {continue}
+
+		results := graph.find_thoughts(g, &pt.embedding, c.max_similar + 1)
+		defer delete(results)
+
+		pt.candidate_ids   = make([dynamic]u64,   0, len(results))
+		pt.candidate_texts = make([dynamic]string, 0, len(results))
+
+		for result in results {
+			if result.score < c.edge_threshold {continue}
+			existing := graph.get_thought(g, result.id)
+			if existing == nil {continue}
+			append(&pt.candidate_ids,   result.id)
+			append(&pt.candidate_texts, strings.clone(existing.text))
+		}
+	}
+	log.info("[ingest:snapshot] snapshotted candidates for %d thoughts", len(pa.thoughts))
+}
+
+// _Link_Task is the per-thought context passed to each link goroutine.
+@(private = "file")
+_Link_Task :: struct {
+	pt:  ^Prepared_Thought,
+	p:   ^provider.Provider,
+	cfg: Config,
+}
+
+@(private = "file")
+_link_thought_goroutine :: proc(t: ^thread.Thread) {
+	task := (^_Link_Task)(t.user_args[0])
+	defer free(task)
+
+	pt  := task.pt
+	p   := task.p
+	cfg := task.cfg
+
+	if len(pt.candidate_texts) == 0 {return}
+
+	log.info("[ingest:link] evaluating %d candidates for thought", len(pt.candidate_texts))
+	links, links_ok := p.batch_link_reason(p, pt.text, pt.candidate_texts[:])
+	pt.links    = links
+	pt.links_ok = links_ok
+	if !links_ok {
+		log.warn("[ingest:link] batch_link_reason failed, treating as zero connections")
+		return
+	}
+
+	// Pre-embed edge reasonings for valid links (also LLM, also no mutex).
+	valid_links: [dynamic]^provider.Batch_Link_Result
+	defer delete(valid_links)
+	for &link in pt.links {
+		if link.index < 0 || link.index >= len(pt.candidate_ids) {continue}
+		if link.weight < cfg.min_link_weight {continue}
+		append(&valid_links, &link)
+	}
+
+	if len(valid_links) == 0 {return}
+
+	reasoning_texts := make([]string, len(valid_links))
+	defer delete(reasoning_texts)
+	for i in 0 ..< len(valid_links) {
+		reasoning_texts[i] = valid_links[i].reasoning
+	}
+
+	edge_embeddings, batch_ok := p.embed_texts(p, reasoning_texts)
+	pt.edge_embeddings = edge_embeddings
+	pt.edge_emb_ok     = batch_ok
+	if !batch_ok {
+		log.warn("[ingest:link] failed to batch-embed edge reasonings")
+	}
+}
+
+// ingest_link runs the LLM-heavy link-reasoning for all thoughts in pa IN PARALLEL.
+// One goroutine is spawned per thought; all are joined before returning.
+// Uses only pre-snapshotted candidate_texts — no graph access at all.
+// Safe to call from multiple article goroutines concurrently.
+ingest_link :: proc(p: ^provider.Provider, pa: ^Prepared_Article, c: Config = DEFAULT_CONFIG) {
+	threads := make([dynamic]^thread.Thread, 0, len(pa.thoughts))
+	defer delete(threads)
+
+	for &pt in pa.thoughts {
+		task := new(_Link_Task)
+		task.pt  = &pt
+		task.p   = p
+		task.cfg = c
+
+		t := thread.create(_link_thought_goroutine)
+		t.user_args[0] = task
+		t.init_context = context
+		thread.start(t)
+		append(&threads, t)
+	}
+
+	for t in threads {
+		thread.join(t)
+		thread.destroy(t)
+	}
+
+	log.info("[ingest:link] link phase complete for %d thoughts (parallel)", len(pa.thoughts))
+}
+
+// ingest_commit takes prepared+snapshotted+linked thoughts and writes them
+// into the graph.  This phase ONLY does graph mutations — no LLM calls.
+// Must be called under the handler mutex.
+ingest_commit :: proc(
+	g: ^graph.Graph,
+	p: ^provider.Provider,
+	pa: ^Prepared_Article,
+	c: Config = DEFAULT_CONFIG,
+) -> int {
+	maturity := graph_maturity(g, c)
+	log.info(
+		"[ingest:commit] committing %d thoughts (graph maturity: %.2f)",
+		len(pa.thoughts),
+		maturity,
+	)
+
+	added := 0
+
+	for &pt in pa.thoughts {
+		// Count valid links from the pre-computed LLM results.
+		valid_link_count := 0
+		if pt.links_ok {
+			for &link in pt.links {
+				if link.index >= 0 &&
+				   link.index < len(pt.candidate_ids) &&
+				   link.weight >= c.min_link_weight {
+					valid_link_count += 1
+				}
+			}
+		}
+
+		if valid_link_count == 0 && !should_keep_unconnected(g, c) {
+			log.info("[ingest:commit] unconnected thought (graph mature): %.60s...", pt.text)
+			if c.limbo_graph != nil {
+				now := time.time_to_unix(time.now())
+				src := fmt.aprintf("limbo:%d", now)
+				defer delete(src)
+				log.info("[ingest:commit] routing to limbo (current limbo size: %d)", graph.thought_count(c.limbo_graph))
+				graph.add_thought(c.limbo_graph, pt.text, src, pt.embedding, now)
+				log.info(
+					"[ingest:commit] thought routed to limbo (%d total)",
+					graph.thought_count(c.limbo_graph),
+				)
+			} else {
+				log.info("[ingest:commit] dropping thought (no limbo configured)")
+			}
+			continue
+		}
+
+		now := time.time_to_unix(time.now())
+		source_id := fmt.tprintf("ingest:%d", now)
+		thought_id := graph.add_thought(g, pt.text, source_id, pt.embedding, now)
+		added += 1
+
+		log.info("[ingest:commit] added thought %d: %.60s...", thought_id, pt.text)
+
+		if pt.links_ok && pt.edge_emb_ok && pt.edge_embeddings != nil {
+			emb_idx := 0
+			for &link in pt.links {
+				if link.index < 0 || link.index >= len(pt.candidate_ids) {continue}
+				if link.weight < c.min_link_weight {continue}
+				if emb_idx >= len(pt.edge_embeddings) {continue}
+				target_id := pt.candidate_ids[link.index]
+				graph.add_edge(
+					g,
+					thought_id,
+					target_id,
+					link.weight,
+					link.reasoning,
+					pt.edge_embeddings[emb_idx],
+					now,
+				)
+				log.info(
+					"[ingest:commit] added edge %d -> %d (weight=%.2f)",
+					thought_id,
+					target_id,
+					link.weight,
+				)
+				emb_idx += 1
+			}
+		}
+	}
+
+	log.info("[ingest:commit] commit complete: %d thoughts added", added)
+
+	if added > 0 {
+		update_tags(g, p, c)
+	}
+
+	return added
+}
+
 @(private = "file")
 graph_maturity :: proc(g: ^graph.Graph, c: Config) -> f32 {
 	if c.maturity_threshold <= 0 {return 1.0}
@@ -51,6 +342,12 @@ should_keep_unconnected :: proc(g: ^graph.Graph, c: Config) -> bool {
 }
 
 
+// ingest is the original single-phase entry point.  It runs prepare + snapshot
+// + link + commit sequentially, holding no external mutex during LLM calls.
+// Kept for backward compatibility and non-queued callers.
+// NOTE: The caller must ensure the graph is not mutated concurrently between
+// snapshot and commit (i.e. this is not safe to call from multiple threads
+// against the same graph without external locking).
 ingest :: proc(
 	g: ^graph.Graph,
 	p: ^provider.Provider,
@@ -62,159 +359,15 @@ ingest :: proc(
 		return 0
 	}
 
-	thoughts, decompose_ok := p.decompose_text(p, text, g.purpose, descriptor)
-	if !decompose_ok {
-		log.warn("[ingest] failed to decompose text")
+	pa, ok := ingest_prepare(p, text, g.purpose, descriptor)
+	if !ok {
 		return -1
 	}
-	defer delete(thoughts)
+	defer prepared_article_release(&pa)
 
-	maturity := graph_maturity(g, c)
-	log.info(
-		"[ingest] decomposed into %d candidate thoughts (graph maturity: %.2f)",
-		len(thoughts),
-		maturity,
-	)
-
-	added := 0
-
-	for thought_text in thoughts {
-		defer delete(thought_text)
-
-		embedding, embed_ok := p.embed_text(p, thought_text)
-		if !embed_ok {
-			log.warn("[ingest] failed to embed thought, skipping")
-			continue
-		}
-
-		has_candidates := graph.thought_count(g) >= 1
-
-		links: []provider.Batch_Link_Result
-		candidate_ids: [dynamic]u64
-		links_ok := false
-
-		if has_candidates {
-			results := graph.find_thoughts(g, &embedding, c.max_similar + 1)
-			defer delete(results)
-
-			candidate_texts := make([dynamic]string, 0, len(results))
-			defer delete(candidate_texts)
-			candidate_ids = make([dynamic]u64, 0, len(results))
-
-			for result in results {
-				if result.score < c.edge_threshold {continue}
-				existing := graph.get_thought(g, result.id)
-				if existing == nil {continue}
-				append(&candidate_texts, existing.text)
-				append(&candidate_ids, result.id)
-			}
-
-			if len(candidate_texts) > 0 {
-				log.info("[ingest] evaluating %d candidates for thought", len(candidate_texts))
-				links, links_ok = p.batch_link_reason(p, thought_text, candidate_texts[:])
-				if !links_ok {
-					log.warn("[ingest] batch_link_reason failed, treating as zero connections")
-				}
-			}
-		}
-
-		valid_link_count := 0
-		if links_ok {
-			for &link in links {
-				if link.index >= 0 &&
-				   link.index < len(candidate_ids) &&
-				   link.weight >= c.min_link_weight {
-					valid_link_count += 1
-				}
-			}
-		}
-
-		if valid_link_count == 0 && !should_keep_unconnected(g, c) {
-			log.info("[ingest] unconnected thought (graph mature): %.60s...", thought_text)
-			if links_ok {
-				for &link in links {delete(link.reasoning)}
-				delete(links)
-			}
-			delete(candidate_ids)
-
-			if c.limbo_graph != nil {
-				now := time.time_to_unix(time.now())
-				src := fmt.tprintf("limbo:%d", now)
-				graph.add_thought(c.limbo_graph, thought_text, src, embedding, now)
-				log.info(
-					"[ingest] thought routed to limbo (%d total)",
-					graph.thought_count(c.limbo_graph),
-				)
-			} else {
-				log.info("[ingest] dropping thought (no limbo configured)")
-			}
-			continue
-		}
-
-		now := time.time_to_unix(time.now())
-		source_id := fmt.tprintf("ingest:%d", now)
-		thought_id := graph.add_thought(g, thought_text, source_id, embedding, now)
-		added += 1
-
-		log.info("[ingest] added thought %d: %.60s...", thought_id, thought_text)
-
-		if links_ok {
-			valid_links: [dynamic]^provider.Batch_Link_Result
-			defer delete(valid_links)
-
-			for &link in links {
-				if link.index < 0 || link.index >= len(candidate_ids) {continue}
-				if link.weight < c.min_link_weight {continue}
-				append(&valid_links, &link)
-			}
-
-			if len(valid_links) > 0 {
-				reasoning_texts := make([]string, len(valid_links))
-				defer delete(reasoning_texts)
-				for i in 0 ..< len(valid_links) {
-					reasoning_texts[i] = valid_links[i].reasoning
-				}
-
-				edge_embeddings, batch_ok := p.embed_texts(p, reasoning_texts)
-				if !batch_ok {
-					log.warn("[ingest] failed to batch-embed edge reasonings, skipping edges")
-				} else {
-					defer delete(edge_embeddings)
-					for i in 0 ..< len(valid_links) {
-						link := valid_links[i]
-						target_id := candidate_ids[link.index]
-						graph.add_edge(
-							g,
-							thought_id,
-							target_id,
-							link.weight,
-							link.reasoning,
-							edge_embeddings[i],
-							now,
-						)
-						log.info(
-							"[ingest] added edge %d → %d (weight=%.2f)",
-							thought_id,
-							target_id,
-							link.weight,
-						)
-					}
-				}
-			}
-
-			for &link in links {delete(link.reasoning)}
-			delete(links)
-		}
-		delete(candidate_ids)
-	}
-
-	log.info("[ingest] ingestion complete: %d thoughts added", added)
-
-	if added > 0 {
-		update_tags(g, p, c)
-	}
-
-	return added
+	ingest_snapshot(g, &pa, c)
+	ingest_link(p, &pa, c)
+	return ingest_commit(g, p, &pa, c)
 }
 
 @(private = "file")

@@ -80,6 +80,8 @@ add_thought :: proc(
 		access_count  = 0,
 		last_accessed = 0,
 	}
+
+	// Copy the thought onto the heap via map insert before taking any pointer.
 	g.thoughts[id] = t
 
 	n := f32(g.profile_count)
@@ -89,7 +91,10 @@ add_thought :: proc(
 	g.profile_count += 1
 
 	if g.stream_handle != os.INVALID_HANDLE {
-		stream_thought(g.stream_handle, &g.thoughts[id])
+		// Use the locally-constructed value for streaming rather than
+		// indexing back into the map; the map pointer is safe but the
+		// local copy avoids any subtlety around large-struct map entries.
+		stream_thought(g.stream_handle, &t)
 	}
 
 	return id

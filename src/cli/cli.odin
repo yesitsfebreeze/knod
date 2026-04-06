@@ -1,6 +1,5 @@
 package cli
 
-import "core:fmt"
 import "core:mem"
 import "core:os"
 import "core:path/filepath"
@@ -8,6 +7,7 @@ import "core:strings"
 
 import "../gnn"
 import "../graph"
+import log "../logger"
 import "../registry"
 import "../util"
 
@@ -27,6 +27,7 @@ Command :: struct {
 	knid_scope: string,
 	query:      string,
 	no_limbo:   bool,
+	no_http:    bool,
 }
 
 parse_and_dispatch :: proc() -> Command {
@@ -57,6 +58,8 @@ parse_and_dispatch :: proc() -> Command {
 			query_text = arg[8:]
 		} else if arg == "--no-limbo" || arg == "-nl" {
 			cmd.no_limbo = true
+		} else if arg == "--no-http" || arg == "-nh" {
+			cmd.no_http = true
 		} else {
 			append(&filtered, arg)
 		}
@@ -65,7 +68,7 @@ parse_and_dispatch :: proc() -> Command {
 
 	if internal_query {
 		if len(graph_path) == 0 || len(query_text) == 0 {
-			fmt.println("usage: knod --internal-query --graph=<path> --query=<text>")
+			log.raw("usage: knod --internal-query --graph=<path> --query=<text>\n")
 			cmd.action = .EXIT
 			return cmd
 		}
@@ -88,7 +91,7 @@ parse_and_dispatch :: proc() -> Command {
 		cmd.action = .EXIT
 	case "register":
 		if len(rest) < 1 {
-			fmt.println("usage: knod register <path>")
+			log.raw("usage: knod register <path>\n")
 			cmd.action = .EXIT
 		} else {
 			cmd_register(rest[0], cmd.knid_scope)
@@ -102,7 +105,7 @@ parse_and_dispatch :: proc() -> Command {
 		cmd.action = .EXIT
 	case "ask":
 		if len(rest) < 1 {
-			fmt.println("usage: knod [--knid=<name>] ask <query>")
+			log.raw("usage: knod [--knid=<name>] ask <query>\n")
 			cmd.action = .EXIT
 		} else {
 
@@ -110,7 +113,7 @@ parse_and_dispatch :: proc() -> Command {
 			cmd.action = .ASK
 		}
 	case:
-		fmt.printf("unknown command: %s\n", subcmd)
+		log.rawf("unknown command: %s\n", subcmd)
 		print_usage()
 		cmd.action = .EXIT
 	}
@@ -121,10 +124,10 @@ parse_and_dispatch :: proc() -> Command {
 
 cmd_new :: proc(knid_scope: string) {
 
-	fmt.print("purpose: ")
+	log.raw("purpose: ")
 	purpose := read_line()
 	if len(purpose) == 0 {
-		fmt.println("error: purpose cannot be empty")
+		log.err("purpose cannot be empty")
 		return
 	}
 	defer delete(purpose)
@@ -133,7 +136,7 @@ cmd_new :: proc(knid_scope: string) {
 	default_name := derive_name(purpose)
 	defer delete(default_name)
 
-	fmt.printf("name [%s]: ", default_name)
+	log.rawf("name [%s]: ", default_name)
 	name_input := read_line()
 	name: string
 	if len(name_input) == 0 {
@@ -147,7 +150,7 @@ cmd_new :: proc(knid_scope: string) {
 	defer registry.release(&reg)
 
 	if registry.find_store(&reg, name) != nil {
-		fmt.printf("error: store '%s' already exists\n", name)
+		log.err("store '%s' already exists", name)
 		if len(name_input) == 0 {
 
 		}
@@ -159,7 +162,7 @@ cmd_new :: proc(knid_scope: string) {
 	default_path := default_store_path(name)
 	defer delete(default_path)
 
-	fmt.printf("location [%s]: ", default_path)
+	log.rawf("location [%s]: ", default_path)
 	path_input := read_line()
 	store_path: string
 	if len(path_input) == 0 {
@@ -175,7 +178,7 @@ cmd_new :: proc(knid_scope: string) {
 
 
 	if !create_empty_strand(store_path, purpose) {
-		fmt.printf("error: could not create store at %s\n", store_path)
+		log.err("could not create store at %s", store_path)
 		delete(name)
 		delete(store_path)
 		return
@@ -203,14 +206,14 @@ cmd_new :: proc(knid_scope: string) {
 	}
 
 	if !registry.save(&reg) {
-		fmt.println("error: could not save registry")
+		log.err("could not save registry")
 		delete(name)
 		return
 	}
 
-	fmt.printf("created store '%s' at %s\n", name, abs_path)
+	log.rawf("created store '%s' at %s\n", name, abs_path)
 	if len(knid_scope) > 0 {
-		fmt.printf("added to knid '%s'\n", knid_scope)
+		log.rawf("added to knid '%s'\n", knid_scope)
 	}
 	delete(name)
 }
@@ -218,14 +221,14 @@ cmd_new :: proc(knid_scope: string) {
 
 cmd_register :: proc(path: string, knid_scope: string) {
 	if !os.exists(path) {
-		fmt.printf("error: file not found: %s\n", path)
+		log.err("file not found: %s", path)
 		return
 	}
 
 
 	purpose, valid := read_store_header(path)
 	if !valid {
-		fmt.printf("error: %s is not a valid knod store file\n", path)
+		log.err("%s is not a valid knod store file", path)
 		return
 	}
 	defer if len(purpose) > 0 {delete(purpose)}
@@ -243,7 +246,7 @@ cmd_register :: proc(path: string, knid_scope: string) {
 	name := strings.clone(base)
 
 	if registry.find_store(&reg, name) != nil {
-		fmt.printf("error: store '%s' already registered\n", name)
+		log.err("store '%s' already registered", name)
 		delete(name)
 		return
 	}
@@ -259,18 +262,18 @@ cmd_register :: proc(path: string, knid_scope: string) {
 	}
 
 	if !registry.save(&reg) {
-		fmt.println("error: could not save registry")
+		log.err("could not save registry")
 		delete(name)
 		return
 	}
 
 	if len(purpose) > 0 {
-		fmt.printf("registered '%s' (%s)\n  purpose: %s\n", name, abs_path, purpose)
+		log.rawf("registered '%s' (%s)\n  purpose: %s\n", name, abs_path, purpose)
 	} else {
-		fmt.printf("registered '%s' (%s)\n  no purpose set\n", name, abs_path)
+		log.rawf("registered '%s' (%s)\n  no purpose set\n", name, abs_path)
 	}
 	if len(knid_scope) > 0 {
-		fmt.printf("added to knid '%s'\n", knid_scope)
+		log.rawf("added to knid '%s'\n", knid_scope)
 	}
 	delete(name)
 }
@@ -284,37 +287,37 @@ cmd_list :: proc(knid_scope: string) {
 
 		k := registry.find_knid(&reg, knid_scope)
 		if k == nil {
-			fmt.printf("error: knid '%s' not found\n", knid_scope)
+			log.err("knid '%s' not found", knid_scope)
 			return
 		}
-		fmt.printf("knid '%s':\n", knid_scope)
+		log.rawf("knid '%s':\n", knid_scope)
 		stores := registry.knid_stores(&reg, knid_scope)
 		defer delete(stores)
 		if len(stores) == 0 {
-			fmt.println("  (empty)")
+			log.raw("  (empty)\n")
 		} else {
 			for s in stores {
-				fmt.printf("  %s = %s\n", s.name, s.path)
+				log.rawf("  %s = %s\n", s.name, s.path)
 			}
 		}
 	} else {
 
 		if len(reg.stores) == 0 {
-			fmt.println("no stores registered")
+			log.raw("no stores registered\n")
 			return
 		}
-		fmt.println("stores:")
+		log.raw("stores:\n")
 		for &s in reg.stores {
-			fmt.printf("  %s = %s\n", s.name, s.path)
+			log.rawf("  %s = %s\n", s.name, s.path)
 		}
 
 
 		if len(reg.knids) > 0 {
-			fmt.println("\nknids:")
+			log.raw("\nknids:\n")
 			for &k in reg.knids {
 				members := strings.join(k.members[:], ", ")
 				defer delete(members)
-				fmt.printf("  [%s] %s\n", k.name, members)
+				log.rawf("  [%s] %s\n", k.name, members)
 			}
 		}
 	}
@@ -323,7 +326,7 @@ cmd_list :: proc(knid_scope: string) {
 
 cmd_knid :: proc(args: []string) {
 	if len(args) == 0 {
-		fmt.println("usage: knod knid <new|add|remove|list> [args...]")
+		log.raw("usage: knod knid <new|add|remove|list> [args...]\n")
 		return
 	}
 
@@ -333,19 +336,19 @@ cmd_knid :: proc(args: []string) {
 	switch sub {
 	case "new":
 		if len(rest) < 1 {
-			fmt.println("usage: knod knid new <name>")
+			log.raw("usage: knod knid new <name>\n")
 			return
 		}
 		knid_new(rest[0])
 	case "add":
 		if len(rest) < 2 {
-			fmt.println("usage: knod knid add <knid> <store>")
+			log.raw("usage: knod knid add <knid> <store>\n")
 			return
 		}
 		knid_add(rest[0], rest[1])
 	case "remove":
 		if len(rest) < 2 {
-			fmt.println("usage: knod knid remove <knid> <store>")
+			log.raw("usage: knod knid remove <knid> <store>\n")
 			return
 		}
 		knid_remove(rest[0], rest[1])
@@ -356,8 +359,8 @@ cmd_knid :: proc(args: []string) {
 			knid_list_all()
 		}
 	case:
-		fmt.printf("unknown knid command: %s\n", sub)
-		fmt.println("usage: knod knid <new|add|remove|list> [args...]")
+		log.rawf("unknown knid command: %s\n", sub)
+		log.raw("usage: knod knid <new|add|remove|list> [args...]\n")
 	}
 }
 
@@ -366,16 +369,16 @@ knid_new :: proc(name: string) {
 	defer registry.release(&reg)
 
 	if !registry.add_knid(&reg, name) {
-		fmt.printf("error: knid '%s' already exists\n", name)
+		log.err("knid '%s' already exists", name)
 		return
 	}
 
 	if !registry.save(&reg) {
-		fmt.println("error: could not save registry")
+		log.err("could not save registry")
 		return
 	}
 
-	fmt.printf("created knid '%s'\n", name)
+	log.rawf("created knid '%s'\n", name)
 }
 
 knid_add :: proc(knid_name, store_name: string) {
@@ -383,26 +386,26 @@ knid_add :: proc(knid_name, store_name: string) {
 	defer registry.release(&reg)
 
 	if registry.find_knid(&reg, knid_name) == nil {
-		fmt.printf("error: knid '%s' not found\n", knid_name)
+		log.err("knid '%s' not found", knid_name)
 		return
 	}
 
 	if registry.find_store(&reg, store_name) == nil {
-		fmt.printf("error: store '%s' not registered\n", store_name)
+		log.err("store '%s' not registered", store_name)
 		return
 	}
 
 	if !registry.knid_add_store(&reg, knid_name, store_name) {
-		fmt.printf("error: '%s' is already in knid '%s'\n", store_name, knid_name)
+		log.err("'%s' is already in knid '%s'", store_name, knid_name)
 		return
 	}
 
 	if !registry.save(&reg) {
-		fmt.println("error: could not save registry")
+		log.err("could not save registry")
 		return
 	}
 
-	fmt.printf("added '%s' to knid '%s'\n", store_name, knid_name)
+	log.rawf("added '%s' to knid '%s'\n", store_name, knid_name)
 }
 
 knid_remove :: proc(knid_name, store_name: string) {
@@ -410,16 +413,16 @@ knid_remove :: proc(knid_name, store_name: string) {
 	defer registry.release(&reg)
 
 	if !registry.knid_remove_store(&reg, knid_name, store_name) {
-		fmt.printf("error: could not remove '%s' from knid '%s'\n", store_name, knid_name)
+		log.err("could not remove '%s' from knid '%s'", store_name, knid_name)
 		return
 	}
 
 	if !registry.save(&reg) {
-		fmt.println("error: could not save registry")
+		log.err("could not save registry")
 		return
 	}
 
-	fmt.printf("removed '%s' from knid '%s'\n", store_name, knid_name)
+	log.rawf("removed '%s' from knid '%s'\n", store_name, knid_name)
 }
 
 knid_list_all :: proc() {
@@ -427,14 +430,14 @@ knid_list_all :: proc() {
 	defer registry.release(&reg)
 
 	if len(reg.knids) == 0 {
-		fmt.println("no knids defined")
+		log.raw("no knids defined\n")
 		return
 	}
 
 	for &k in reg.knids {
 		members := strings.join(k.members[:], ", ")
 		defer delete(members)
-		fmt.printf("[%s] %s\n", k.name, members)
+		log.rawf("[%s] %s\n", k.name, members)
 	}
 }
 
@@ -444,7 +447,7 @@ knid_list_one :: proc(name: string) {
 
 	k := registry.find_knid(&reg, name)
 	if k == nil {
-		fmt.printf("error: knid '%s' not found\n", name)
+		log.err("knid '%s' not found", name)
 		return
 	}
 
@@ -452,11 +455,11 @@ knid_list_one :: proc(name: string) {
 	defer delete(stores)
 
 	if len(stores) == 0 {
-		fmt.printf("knid '%s': (empty)\n", name)
+		log.rawf("knid '%s': (empty)\n", name)
 	} else {
-		fmt.printf("knid '%s':\n", name)
+		log.rawf("knid '%s':\n", name)
 		for s in stores {
-			fmt.printf("  %s = %s\n", s.name, s.path)
+			log.rawf("  %s = %s\n", s.name, s.path)
 		}
 	}
 }
@@ -493,7 +496,7 @@ cmd_internal_query :: proc(graph_path, query_text: string) {
 
 	if !loaded {
 		if !graph.load(&g, graph_path) {
-			fmt.eprintln("error: could not load graph:", graph_path)
+			log.err("could not load graph: %s", graph_path)
 			if strand_data != nil {delete(strand_data)}
 			return
 		}
@@ -515,7 +518,7 @@ cmd_internal_query :: proc(graph_path, query_text: string) {
 	}
 
 	if total_read != len(embedding_bytes) {
-		fmt.eprintln("error: expected", len(embedding_bytes), "bytes on stdin, got", total_read)
+		log.err("expected %d bytes on stdin, got %d", len(embedding_bytes), total_read)
 		if strand_data != nil {delete(strand_data)}
 		return
 	}
@@ -627,7 +630,7 @@ cmd_internal_query :: proc(graph_path, query_text: string) {
 		if thought != nil {
 			escaped := escape_newlines(thought.text)
 			defer delete(escaped)
-			fmt.printf("T\t%.6f\t%d\t%s\n", ranked[i].score, ranked[i].id, escaped)
+			log.rawf("T\t%.6f\t%d\t%s\n", ranked[i].score, ranked[i].id, escaped)
 		}
 	}
 
@@ -638,7 +641,7 @@ cmd_internal_query :: proc(graph_path, query_text: string) {
 		if len(edge.reasoning) > 0 {
 			escaped := escape_newlines(edge.reasoning)
 			defer delete(escaped)
-			fmt.printf("E\t%.6f\t%s\n", er.score, escaped)
+			log.rawf("E\t%.6f\t%s\n", er.score, escaped)
 			edge_context_count += 1
 		}
 	}
@@ -652,7 +655,7 @@ get_store_paths :: proc(knid_scope: string) -> []registry.Store {
 	if len(knid_scope) > 0 {
 		stores := registry.knid_stores(&reg, knid_scope)
 		if stores == nil {
-			fmt.printf("error: knid '%s' not found\n", knid_scope)
+			log.err("knid '%s' not found", knid_scope)
 			return {}
 		}
 
@@ -753,23 +756,24 @@ gnn_checkpoint_path :: proc(graph_path_arg: string) -> string {
 
 
 print_usage :: proc() {
-	fmt.println("usage: knod [options] <command>")
-	fmt.println("")
-	fmt.println("options:")
-	fmt.println("  --knid=<name>              scope to a named collection")
-	fmt.println("  --no-limbo, -nl            disable the limbo holding graph")
-	fmt.println("")
-	fmt.println("commands:")
-	fmt.println("  (none)                     start the main process")
-	fmt.println("  new                        create a new store")
-	fmt.println("  register <path>            register an existing store")
-	fmt.println("  list                       list registered stores")
-	fmt.println("  ask <query>                query across registered stores")
-	fmt.println("")
-	fmt.println("  knid new <name>            create a named collection")
-	fmt.println("  knid add <knid> <store>    add a store to a knid")
-	fmt.println("  knid remove <knid> <store> remove a store from a knid")
-	fmt.println("  knid list [knid]           list knids or stores in a knid")
+	log.raw("usage: knod [options] <command>\n")
+	log.raw("\n")
+	log.raw("options:\n")
+	log.raw("  --knid=<name>              scope to a named collection\n")
+	log.raw("  --no-limbo, -nl            disable the limbo holding graph\n")
+	log.raw("  --no-http, -nh             disable the HTTP server\n")
+	log.raw("\n")
+	log.raw("commands:\n")
+	log.raw("  (none)                     start the main process\n")
+	log.raw("  new                        create a new store\n")
+	log.raw("  register <path>            register an existing store\n")
+	log.raw("  list                       list registered stores\n")
+	log.raw("  ask <query>                query across registered stores\n")
+	log.raw("\n")
+	log.raw("  knid new <name>            create a named collection\n")
+	log.raw("  knid add <knid> <store>    add a store to a knid\n")
+	log.raw("  knid remove <knid> <store> remove a store from a knid\n")
+	log.raw("  knid list [knid]           list knids or stores in a knid\n")
 }
 
 
@@ -820,7 +824,9 @@ default_store_path :: proc(name: string) -> string {
 		return strings.clone(name)
 	}
 	defer delete(home)
-	return filepath.join({home, ".config", "knod", "data", fmt.tprintf("%s.strand", name)})
+	filename := strings.concatenate({name, ".strand"})
+	defer delete(filename)
+	return filepath.join({home, ".config", "knod", "data", filename})
 }
 
 

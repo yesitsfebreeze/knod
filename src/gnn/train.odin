@@ -5,6 +5,15 @@ import "core:math"
 import "../graph"
 import log "../logger"
 
+// adaptive_steps computes the number of training steps given the current
+// graph size.  Steps scale linearly from step_max down to step_min as the
+// thought count grows from 0 to MATURITY_THRESHOLD.
+adaptive_steps :: proc(n, step_max, step_min: int) -> int {
+	maturity := min(f32(n) / f32(MATURITY_THRESHOLD), 1.0)
+	s := f32(step_max) - maturity * f32(step_max - step_min)
+	return max(step_min, int(s + 0.5)) // round to nearest
+}
+
 build_snapshot :: proc(g: ^graph.Graph) -> GraphSnapshot {
 	snap: GraphSnapshot
 
@@ -260,14 +269,13 @@ train_strand :: proc(base: ^MPNN, strand: ^StrandMPNN, g: ^graph.Graph, steps: i
 	maturity := min(f32(n) / 1024.0, 1.0)
 	lr := ADAPT_LR_MAX * math.pow(ADAPT_LR_MIN / ADAPT_LR_MAX, maturity)
 
+	// Build snapshot once — graph is unchanged across training steps.
+	full_snap := build_snapshot(g)
+	defer release_snapshot(&full_snap)
+
+	if full_snap.num_nodes < 2 {return}
+
 	for step in 0 ..< steps {
-		full_snap := build_snapshot(g)
-
-		if full_snap.num_nodes < 2 {
-			release_snapshot(&full_snap)
-			continue
-		}
-
 		rng_mask := base.rng
 		masked_snap, mask := build_masked_snapshot(&full_snap, &rng_mask)
 
@@ -302,7 +310,6 @@ train_strand :: proc(base: ^MPNN, strand: ^StrandMPNN, g: ^graph.Graph, steps: i
 		release_cache(&cache)
 		if any_masked {release_masked_snapshot(&masked_snap)}
 		delete(mask)
-		release_snapshot(&full_snap)
 
 		base.rng = rng_mask
 
@@ -318,14 +325,13 @@ train_base_refine :: proc(base: ^MPNN, strand: ^StrandMPNN, g: ^graph.Graph, ste
 
 	lr := BASE_LR
 
+	// Build snapshot once — graph is unchanged across training steps.
+	full_snap := build_snapshot(g)
+	defer release_snapshot(&full_snap)
+
+	if full_snap.num_nodes < 2 {return}
+
 	for step in 0 ..< steps {
-		full_snap := build_snapshot(g)
-
-		if full_snap.num_nodes < 2 {
-			release_snapshot(&full_snap)
-			continue
-		}
-
 		rng_mask := base.rng
 		masked_snap, mask := build_masked_snapshot(&full_snap, &rng_mask)
 
@@ -360,7 +366,6 @@ train_base_refine :: proc(base: ^MPNN, strand: ^StrandMPNN, g: ^graph.Graph, ste
 		release_cache(&cache)
 		if any_masked {release_masked_snapshot(&masked_snap)}
 		delete(mask)
-		release_snapshot(&full_snap)
 
 		base.rng = rng_mask
 

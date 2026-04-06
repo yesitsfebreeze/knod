@@ -3,6 +3,7 @@ package logger
 import "core:fmt"
 import "core:os"
 import "core:path/filepath"
+import "core:sync"
 import "core:time"
 
 CHANNEL_COUNT :: 3
@@ -33,6 +34,10 @@ level_tags := [4]string{"DBG", "INF", "WRN", "ERR"}
 
 @(private)
 channel_tags := [CHANNEL_COUNT]string{"knod", "perf", "err "}
+
+// mu protects all log output (file writes + stdout) from concurrent goroutines.
+@(private)
+mu: sync.Mutex
 
 init :: proc() {
 	exe_dir := filepath.dir(os.args[0])
@@ -65,53 +70,50 @@ logf :: proc(ch: Channel, level: Level, format: string, args: ..any) {
 	y, mon, d := time.date(now)
 	h, m, s := time.clock(now)
 
-	msg := fmt.tprintf(format, ..args)
+	// Format the message using fmt.aprintf so the string is heap-allocated
+	// and safe even if the temp allocator is in use by another goroutine.
+	msg := fmt.aprintf(format, ..args)
+	defer delete(msg)
 
 	ch_idx := int(ch)
 	lvl_idx := int(level)
 
-	fmt.printf(
+	line_file := fmt.aprintf(
+		"%4d-%02d-%02d %02d:%02d:%02d [%s] %s\n",
+		y, mon, d, h, m, s,
+		level_tags[lvl_idx],
+		msg,
+	)
+	defer delete(line_file)
+
+	line_stdout := fmt.aprintf(
 		"%4d-%02d-%02d %02d:%02d:%02d [%s] [%s] %s\n",
-		y,
-		mon,
-		d,
-		h,
-		m,
-		s,
+		y, mon, d, h, m, s,
 		channel_tags[ch_idx],
 		level_tags[lvl_idx],
 		msg,
 	)
+	defer delete(line_stdout)
+
+	sync.lock(&mu)
+	defer sync.unlock(&mu)
+
+	os.write(os.stdout, transmute([]u8)line_stdout)
 
 	if channel_open[ch_idx] {
-		line := fmt.tprintf(
-			"%4d-%02d-%02d %02d:%02d:%02d [%s] %s\n",
-			y,
-			mon,
-			d,
-			h,
-			m,
-			s,
-			level_tags[lvl_idx],
-			msg,
-		)
-		os.write(channel_files[ch_idx], transmute([]u8)line)
+		os.write(channel_files[ch_idx], transmute([]u8)line_file)
 	}
 
 	if level >= .WARN && ch != .ERR && channel_open[int(Channel.ERR)] {
-		line := fmt.tprintf(
+		line_err := fmt.aprintf(
 			"%4d-%02d-%02d %02d:%02d:%02d [%s] [%s] %s\n",
-			y,
-			mon,
-			d,
-			h,
-			m,
-			s,
+			y, mon, d, h, m, s,
 			channel_tags[ch_idx],
 			level_tags[lvl_idx],
 			msg,
 		)
-		os.write(channel_files[int(Channel.ERR)], transmute([]u8)line)
+		defer delete(line_err)
+		os.write(channel_files[int(Channel.ERR)], transmute([]u8)line_err)
 	}
 }
 
@@ -133,5 +135,16 @@ perf :: proc(format: string, args: ..any) {
 
 debug :: proc(format: string, args: ..any) {
 	logf(.KNOD, .DEBUG, format, ..args)
+}
+
+// raw writes unformatted text to stdout (no timestamp, no tags).
+// Use for user-facing output like prompts, help text, and IPC protocol lines.
+raw :: proc(text: string) {
+	fmt.print(text)
+}
+
+// rawf writes formatted text to stdout (no timestamp, no tags).
+rawf :: proc(format: string, args: ..any) {
+	fmt.printf(format, ..args)
 }
 

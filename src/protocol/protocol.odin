@@ -1,6 +1,8 @@
 package protocol
 
+import "core:fmt"
 import "core:strings"
+import "core:sync"
 
 import "../gnn"
 import "../graph"
@@ -18,6 +20,31 @@ Handler :: struct {
 	base_checkpoint_path: string,
 	ingest_cfg:           ingest.Config,
 	limbo:                ^graph.Graph,
+	mu:                   sync.Mutex,     // protects graph/gnn access across threads
+	queue:                Ingest_Queue,   // async ingest queue (started separately)
+	queue_ok:             bool,           // true when queue is initialised
+}
+
+// handler_start_queue creates and starts the async ingest queue.
+handler_start_queue :: proc(h: ^Handler) -> bool {
+	if !queue_init(&h.queue, h, &h.mu) {return false}
+	h.queue_ok = true
+	return true
+}
+
+// handler_stop_queue shuts down the ingest queue and joins the worker.
+handler_stop_queue :: proc(h: ^Handler) {
+	if h.queue_ok {
+		queue_destroy(&h.queue)
+		h.queue_ok = false
+	}
+}
+
+// handler_enqueue pushes text into the async ingest queue.
+// Returns false if the queue is not started or is full.
+handler_enqueue :: proc(h: ^Handler, text: string, descriptor: string = "") -> bool {
+	if !h.queue_ok {return false}
+	return queue_push(&h.queue, text, descriptor)
 }
 
 IngestResult :: struct {
@@ -36,8 +63,11 @@ handle_ingest :: proc(h: ^Handler, text: string, descriptor: string = "") -> Ing
 			graph.thought_count(h.g),
 			graph.edge_count(h.g),
 		)
-		gnn.train_strand(h.model, h.strand, h.g, gnn.STRAND_TRAIN_STEPS)
-		gnn.train_base_refine(h.model, h.strand, h.g, gnn.BASE_REFINE_STEPS)
+		n := graph.thought_count(h.g)
+		strand_steps := gnn.adaptive_steps(n, gnn.STRAND_TRAIN_STEPS_MAX, gnn.STRAND_TRAIN_STEPS_MIN)
+		base_steps := gnn.adaptive_steps(n, gnn.BASE_REFINE_STEPS_MAX, gnn.BASE_REFINE_STEPS_MIN)
+		gnn.train_strand(h.model, h.strand, h.g, strand_steps)
+		gnn.train_base_refine(h.model, h.strand, h.g, base_steps)
 
 		gnn.save_checkpoint(h.model, h.base_checkpoint_path)
 
@@ -209,6 +239,25 @@ handle_ask :: proc(h: ^Handler, query: string) -> (answer: string, ok: bool) {
 	)
 
 	return result, true
+}
+
+handle_status :: proc(h: ^Handler) -> string {
+	thoughts := graph.thought_count(h.g)
+	edges := graph.edge_count(h.g)
+	gnn_step := h.model.adam_t
+	strand_step := h.strand.adam_t
+	queued := h.queue_ok ? queue_len(&h.queue) : 0
+	in_flight := h.queue_ok ? queue_in_flight(&h.queue) : 0
+	return fmt.aprintf(
+		"thoughts:%d edges:%d gnn_step:%d strand_step:%d queued:%d in_flight:%d graph:%s",
+		thoughts,
+		edges,
+		gnn_step,
+		strand_step,
+		queued,
+		in_flight,
+		h.graph_path,
+	)
 }
 
 // save_graph persists the graph in the correct format based on the file extension.

@@ -117,7 +117,7 @@ def start_knod() -> subprocess.Popen:
         [KNOD_EXE],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
-        stderr=open(os.path.join("bin", "test_stderr.log"), "w"),
+        stderr=open(os.path.join("bin", "test.err.log"), "w"),
         cwd=os.path.join(os.path.dirname(os.path.abspath(__file__)), "bin"),
     )
 

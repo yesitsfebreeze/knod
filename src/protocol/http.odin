@@ -12,7 +12,6 @@ import log "../logger"
 HTTP :: struct {
 	server:  http.Server,
 	handler: ^Handler,
-	mu:      sync.Mutex,
 	port:    int,
 	t:       ^thread.Thread,
 }
@@ -72,6 +71,16 @@ _http_dispatch :: proc(handler: ^http.Handler, req: ^http.Request, res: ^http.Re
 	method := rline.method
 	path := req.url.path
 
+	// CORS — allow the explore UI to reach the API from any origin (file:// or localhost)
+	http.headers_set_unsafe(&res.headers, "access-control-allow-origin", "*")
+	if method == .Options {
+		http.headers_set_unsafe(&res.headers, "access-control-allow-methods", "GET, POST, DELETE, OPTIONS")
+		http.headers_set_unsafe(&res.headers, "access-control-allow-headers", "content-type")
+		res.status = .No_Content
+		http.respond(res)
+		return
+	}
+
 	if method == .Post && (path == "/ingest" || strings.has_prefix(path, "/ingest")) {
 		ctx := new(HTTP_Context)
 		ctx.h = h
@@ -118,9 +127,9 @@ _http_dispatch :: proc(handler: ^http.Handler, req: ^http.Request, res: ^http.Re
 			http.respond(res, http.Status.Bad_Request)
 			return
 		}
-		sync.lock(&h.mu)
+		sync.lock(&h.handler.mu)
 		ok := handle_descriptor_remove(h.handler, name)
-		sync.unlock(&h.mu)
+		sync.unlock(&h.handler.mu)
 		if ok {
 			http.respond(res, http.Status.OK)
 		} else {
@@ -130,9 +139,9 @@ _http_dispatch :: proc(handler: ^http.Handler, req: ^http.Request, res: ^http.Re
 	}
 
 	if method == .Get && (path == "/descriptor" || path == "/descriptor/") {
-		sync.lock(&h.mu)
+		sync.lock(&h.handler.mu)
 		list := handle_descriptor_list(h.handler)
-		sync.unlock(&h.mu)
+		sync.unlock(&h.handler.mu)
 		res.status = .OK
 		http.body_set(res, list)
 		delete(list)
@@ -144,6 +153,68 @@ _http_dispatch :: proc(handler: ^http.Handler, req: ^http.Request, res: ^http.Re
 		res.status = .OK
 		http.body_set(res, "ok")
 		http.respond(res)
+		return
+	}
+
+	if method == .Get && path == "/status" {
+		// Lock-free — stale reads are acceptable for monitoring.
+		status := handle_status(h.handler)
+		res.status = .OK
+		http.body_set(res, status)
+		delete(status)
+		http.respond(res)
+		return
+	}
+
+	// --- explore API ---
+
+	if method == .Get && (path == "/graph" || path == "/graph/") {
+		sync.lock(&h.handler.mu)
+		body := handle_graph_info(h.handler)
+		sync.unlock(&h.handler.mu)
+		res.status = .OK
+		http.headers_set_unsafe(&res.headers, "content-type", "application/json")
+		http.body_set(res, body)
+		delete(body)
+		http.respond(res)
+		return
+	}
+
+	if method == .Get && (path == "/thoughts" || path == "/thoughts/") {
+		sync.lock(&h.handler.mu)
+		body := handle_thoughts_list(h.handler)
+		sync.unlock(&h.handler.mu)
+		res.status = .OK
+		http.headers_set_unsafe(&res.headers, "content-type", "application/json")
+		http.body_set(res, body)
+		delete(body)
+		http.respond(res)
+		return
+	}
+
+	if method == .Get && strings.has_prefix(path, "/thought/") {
+		id_str := path[len("/thought/"):]
+		if len(id_str) == 0 {
+			http.respond(res, http.Status.Bad_Request)
+			return
+		}
+		sync.lock(&h.handler.mu)
+		body, ok := handle_thought_detail(h.handler, id_str)
+		sync.unlock(&h.handler.mu)
+		if !ok {
+			http.respond(res, http.Status.Not_Found)
+			return
+		}
+		res.status = .OK
+		http.headers_set_unsafe(&res.headers, "content-type", "application/json")
+		http.body_set(res, body)
+		delete(body)
+		http.respond(res)
+		return
+	}
+
+	if method == .Get && strings.has_prefix(path, "/find") {
+		_handle_find_dispatch(h, req, res)
 		return
 	}
 
@@ -168,9 +239,9 @@ _handle_ingest_body :: proc(user_data: rawptr, body: http.Body, err: http.Body_E
 	desc_name := _query_param(query, "descriptor")
 	descriptor_text := ""
 	if len(desc_name) > 0 {
-		sync.lock(&ctx.h.mu)
+		sync.lock(&ctx.h.handler.mu)
 		descriptor_text = get_descriptor_text(ctx.h.handler, desc_name)
-		sync.unlock(&ctx.h.mu)
+		sync.unlock(&ctx.h.handler.mu)
 		if len(descriptor_text) == 0 {
 			log.warn(
 				"[http/ingest] descriptor \"%s\" not found, ingesting without descriptor",
@@ -181,20 +252,31 @@ _handle_ingest_body :: proc(user_data: rawptr, body: http.Body, err: http.Body_E
 
 	log.info("[http/ingest] received %d bytes (descriptor: \"%s\")", len(body), desc_name)
 
-	sync.lock(&ctx.h.mu)
-	result := handle_ingest(ctx.h.handler, string(body), descriptor_text)
-	sync.unlock(&ctx.h.mu)
+	handler := ctx.h.handler
+	if handler_enqueue(handler, string(body), descriptor_text) {
+		pending := queue_len(&handler.queue)
+		reply := fmt.tprintf("queued (%d pending)", pending)
+		res := ctx.res
+		res.status = .OK
+		http.body_set(res, reply)
+		http.respond(res)
+	} else {
+		// Fallback to synchronous if queue not available
+		sync.lock(&handler.mu)
+		result := handle_ingest(handler, string(body), descriptor_text)
+		sync.unlock(&handler.mu)
 
-	reply := fmt.tprintf(
-		"added %d thoughts (%d total, %d edges)",
-		result.added,
-		result.thoughts,
-		result.edges,
-	)
-	res := ctx.res
-	res.status = .OK
-	http.body_set(res, reply)
-	http.respond(res)
+		reply := fmt.tprintf(
+			"added %d thoughts (%d total, %d edges)",
+			result.added,
+			result.thoughts,
+			result.edges,
+		)
+		res := ctx.res
+		res.status = .OK
+		http.body_set(res, reply)
+		http.respond(res)
+	}
 }
 
 @(private)
@@ -214,9 +296,9 @@ _handle_ask_body :: proc(user_data: rawptr, body: http.Body, err: http.Body_Erro
 	query := string(body)
 	log.info("[http/ask] query: \"%s\"", query)
 
-	sync.lock(&ctx.h.mu)
+	sync.lock(&ctx.h.handler.mu)
 	answer, ok := handle_ask(ctx.h.handler, query)
-	sync.unlock(&ctx.h.mu)
+	sync.unlock(&ctx.h.handler.mu)
 
 	res := ctx.res
 	res.status = .OK
@@ -243,9 +325,9 @@ _handle_purpose_body :: proc(user_data: rawptr, body: http.Body, err: http.Body_
 	}
 
 	purpose := strings.trim_space(string(body))
-	sync.lock(&ctx.h.mu)
+	sync.lock(&ctx.h.handler.mu)
 	handle_set_purpose(ctx.h.handler, purpose)
-	sync.unlock(&ctx.h.mu)
+	sync.unlock(&ctx.h.handler.mu)
 
 	res := ctx.res
 	res.status = .OK
@@ -273,9 +355,9 @@ _handle_descriptor_add_body :: proc(user_data: rawptr, body: http.Body, err: htt
 		return
 	}
 
-	sync.lock(&ctx.h.mu)
+	sync.lock(&ctx.h.handler.mu)
 	handle_descriptor_add(ctx.h.handler, name, string(body))
-	sync.unlock(&ctx.h.mu)
+	sync.unlock(&ctx.h.handler.mu)
 
 	res := ctx.res
 	res.status = .OK

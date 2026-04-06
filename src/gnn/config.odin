@@ -34,10 +34,16 @@ GNN_VERSION :: i32(1)
 STRAND_MAGIC :: 0x6B6E7374 // "knst"
 STRAND_VERSION :: i32(1)
 
-// Training steps per ingestion event
-STRAND_TRAIN_STEPS :: 10 // strand-only (base frozen), LR=ADAPT_LR_MAX
-BASE_REFINE_STEPS :: 5 // base-only (strand frozen), LR=BASE_LR
+// Training steps per ingestion event (max — actual steps scale down with maturity)
+STRAND_TRAIN_STEPS_MAX :: 10
+STRAND_TRAIN_STEPS_MIN :: 2
+BASE_REFINE_STEPS_MAX :: 5
+BASE_REFINE_STEPS_MIN :: 1
 BASE_LR: f32 : 1e-5
+
+// Maturity threshold — graph is "mature" at this many thoughts.
+// Training steps reduce linearly from MAX to MIN as thoughts grow from 0 to this.
+MATURITY_THRESHOLD :: 1024
 
 // RNG
 RNG_SEED: u64 : 42
