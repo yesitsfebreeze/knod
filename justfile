@@ -183,6 +183,14 @@ dev: ingest serve
 dev: ingest serve
 	@echo "knod: http://localhost:8080  |  app: http://localhost:{{APP_PORT}}/explore.html"
 
+# Format all Python files with ruff (tabs, width 2)
+fmt:
+	ruff format py_knod
+
+# Check formatting without changing files
+fmt-check:
+	ruff format --check py_knod
+
 # Clean build artifacts
 [windows]
 clean:

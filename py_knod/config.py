@@ -1,0 +1,108 @@
+"""Configuration management — reads from ~/.config/knod/config or env vars."""
+
+import os
+from dataclasses import dataclass, field
+from pathlib import Path
+
+
+@dataclass
+class Config:
+	api_key: str = ""
+	base_url: str = "https://api.openai.com/v1"
+	embedding_model: str = "text-embedding-3-small"
+	chat_model: str = "gpt-4o-mini"
+	embedding_dim: int = 1536
+	hidden_dim: int = 512
+	num_layers: int = 3
+
+	# GNN training
+	edge_mask_ratio: float = 0.15
+	margin: float = 0.1
+	lr_max: float = 1e-3
+	lr_min: float = 5e-5
+	weight_decay: float = 0.01
+
+	# Graph
+	similarity_threshold: float = 0.7
+	min_link_weight: float = 0.1
+	maturity_divisor: int = 50
+	top_k: int = 5
+	max_thoughts: int = 0  # 0 = unlimited
+	max_edges: int = 0  # 0 = unlimited
+	decay_coefficient: float = 0.0  # per-hour edge weight decay; 0 = disabled
+
+	# Dedup
+	dedup_threshold: float = 0.95  # cosine similarity above which a new thought merges into existing
+
+	# Limbo
+	limbo_scan_interval: float = 60.0  # seconds between scans
+	limbo_cluster_min: int = 3  # minimum cluster size to promote
+	limbo_cluster_threshold: float = 0.75  # cosine threshold for clustering
+	specialist_match_threshold: float = 0.8
+
+	# Server
+	tcp_port: int = 7999
+	http_port: int = 8080
+
+	# Paths
+	graph_path: str = "knod.graph"
+
+	@classmethod
+	def load(cls) -> "Config":
+		cfg = cls()
+
+		# Try config file (flat key=value, no section headers)
+		config_path = Path.home() / ".config" / "knod" / "config"
+		if config_path.exists():
+			kv: dict[str, str] = {}
+			for line in config_path.read_text(encoding="utf-8").splitlines():
+				line = line.strip()
+				if not line or line.startswith("#"):
+					continue
+				if "=" in line:
+					k, v = line.split("=", 1)
+					kv[k.strip()] = v.strip()
+
+			for key in (
+				"api_key",
+				"base_url",
+				"embedding_model",
+				"chat_model",
+				"graph_path",
+			):
+				if key in kv:
+					setattr(cfg, key, kv[key])
+			for key in (
+				"http_port",
+				"tcp_port",
+				"embedding_dim",
+				"hidden_dim",
+				"num_layers",
+				"max_thoughts",
+				"max_edges",
+				"limbo_cluster_min",
+			):
+				if key in kv:
+					setattr(cfg, key, int(kv[key]))
+			for key in (
+				"similarity_threshold",
+				"min_link_weight",
+				"edge_mask_ratio",
+				"decay_coefficient",
+				"dedup_threshold",
+				"limbo_scan_interval",
+				"limbo_cluster_threshold",
+				"specialist_match_threshold",
+			):
+				if key in kv:
+					setattr(cfg, key, float(kv[key]))
+
+		# Env overrides
+		if v := os.environ.get("OPENAI_API_KEY"):
+			cfg.api_key = v
+		if v := os.environ.get("KNOD_BASE_URL"):
+			cfg.base_url = v
+		if v := os.environ.get("KNOD_GRAPH_PATH"):
+			cfg.graph_path = v
+
+		return cfg

@@ -1,9 +1,13 @@
 bin/
 build/
 corpus/
+archive/
 
 *.exe
 *.txt
+*.graph
+*.pt
+*.pdb
 __pycache__/
 .ruff_cache/
-.timmy
+.timmy/
