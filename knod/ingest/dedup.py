@@ -1,7 +1,7 @@
 import logging
 
 from ..config import Config
-from ..specialist.graph import Graph
+from ..strand.graph import Graph
 from ..util.math import normalize
 from .prepare import PreparedArticle
 

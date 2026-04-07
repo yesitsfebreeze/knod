@@ -1,0 +1,18 @@
+services:
+  knod:
+    build: .
+    ports:
+      - "8080:8080"
+      - "7999:7999"
+    environment:
+      - KNOD_HTTP_PORT=8080
+      - KNOD_TCP_PORT=7999
+    volumes:
+      - ./config:/root/.config/knod/config:ro
+      - knod-data:/root/.config/knod
+      - knod-graph:/root/.knod
+    restart: unless-stopped
+
+volumes:
+  knod-data:
+  knod-graph:

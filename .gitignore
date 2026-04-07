@@ -8,6 +8,7 @@ archive/
 *.graph
 *.pt
 *.pdb
+.venv/
 __pycache__/
 .ruff_cache/
 .timmy/

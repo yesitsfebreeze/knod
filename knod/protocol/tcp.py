@@ -22,7 +22,7 @@ import struct
 import threading
 
 from ..handler import Handler
-from ..specialist.types import GraphEvent
+from ..strand.types import GraphEvent
 
 log = logging.getLogger(__name__)
 

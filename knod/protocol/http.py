@@ -75,15 +75,16 @@ def http(handler: Handler) -> FastAPI:
 	def stats():
 		return handler.graph_stats()
 
-	@app.get("/specialists")
-	def specialists():
-		return handler.list_specialists()
+	@app.get("/strands")
+	def strands():
+		return handler.list_strands()
 
 	@app.get("/thought/{thought_id}")
 	def get_thought(thought_id: int):
 		result = handler.explore_thought(thought_id)
 		if result is None:
 			from fastapi.responses import JSONResponse
+
 			return JSONResponse(status_code=404, content={"error": f"Thought {thought_id} not found"})
 		return result
 
@@ -92,6 +93,7 @@ def http(handler: Handler) -> FastAPI:
 		result = handler.traverse(start_id, depth=depth, max_nodes=max_nodes)
 		if result is None:
 			from fastapi.responses import JSONResponse
+
 			return JSONResponse(status_code=404, content={"error": f"Thought {start_id} not found"})
 		return result
 

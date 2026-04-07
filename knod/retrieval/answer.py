@@ -31,7 +31,7 @@ import time as _time
 from typing import TYPE_CHECKING
 
 from ..provider import Provider
-from ..specialist.graph import Thought
+from ..strand.graph import Thought
 
 if TYPE_CHECKING:
 	from .expand import PathChain

@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>knod — graph</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div id="loading">loading graph…</div>
+<canvas id="canvas"></canvas>
+<div id="panel" class="glass">
+  <h1>knod graph</h1>
+  <div class="stat">thoughts: <b id="s-nodes">—</b></div>
+  <div class="stat">edges: <b id="s-edges">—</b></div>
+  <input id="search" type="text" placeholder="search thoughts…" autocomplete="off">
+  <div id="search-results"></div>
+
+</div>
+<div id="detail" class="glass">
+  <h2 id="d-title"></h2>
+  <div class="d-meta" id="d-meta"></div>
+  <div class="d-text" id="d-text"></div>
+  <div class="d-edges"><h3>connections</h3><div id="d-edge-list"></div></div>
+</div>
+
+<script type="module" src="/static/viz.js"></script>
+</body>
+</html>

@@ -5,7 +5,7 @@ import numpy as np
 
 from ..config import Config
 from ..provider import Provider
-from ..specialist.graph import Graph
+from ..strand.graph import Graph
 
 log = logging.getLogger(__name__)
 

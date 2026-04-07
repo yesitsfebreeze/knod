@@ -5,7 +5,7 @@
 			"command": "python",
 			"args": [
 				"-m",
-				"py_knod",
+				"knod",
 				"mcp"
 			]
 		}

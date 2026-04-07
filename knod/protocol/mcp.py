@@ -72,13 +72,13 @@ def _mcp(handler: Handler) -> FastMCP:
 
 	@mcp.tool()
 	def graph_stats() -> str:
-		"""Get aggregate statistics for the knowledge graph: thought/edge counts, maturity, limbo size, specialist summaries, and edge quality metrics."""
+		"""Get aggregate statistics for the knowledge graph: thought/edge counts, maturity, limbo size, strand summaries, and edge quality metrics."""
 		return json.dumps(handler.graph_stats())
 
 	@mcp.tool()
-	def list_specialists() -> str:
-		"""List all loaded specialists with their purpose, thought/edge counts, descriptors, and knid group membership."""
-		return json.dumps(handler.list_specialists())
+	def list_strands() -> str:
+		"""List all loaded strands with their purpose, thought/edge counts, descriptors, and knid group membership."""
+		return json.dumps(handler.list_strands())
 
 	@mcp.tool()
 	def ingest_sync(text: str, source: str = "", descriptor: str = "") -> str:
@@ -114,10 +114,10 @@ def _mcp(handler: Handler) -> FastMCP:
 		"""List all descriptors as JSON."""
 		return json.dumps(handler.graph_info["descriptors"])
 
-	@mcp.resource("knod://specialists")
-	def specialists_resource() -> str:
-		"""List all loaded specialists as JSON."""
-		return json.dumps(handler.list_specialists())
+	@mcp.resource("knod://strands")
+	def strands_resource() -> str:
+		"""List all loaded strands as JSON."""
+		return json.dumps(handler.list_strands())
 
 	@mcp.resource("knod://stats")
 	def stats_resource() -> str:

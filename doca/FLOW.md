@@ -6,7 +6,7 @@ flowchart TB
     %% ═══════════════════════════════════════════════════════════
     %% INGESTION
     %% Input:  Raw text + optional source/descriptor
-    %% Output: Committed thoughts → Specialist Store
+    %% Output: Committed thoughts → Strand Store
     %% ═══════════════════════════════════════════════════════════
     subgraph INGEST ["📥 INGESTION"]
         direction TB
@@ -59,7 +59,7 @@ flowchart TB
     %% ═══════════════════════════════════════════════════════════
     %% LIMBO
     %% Input:  Rejected thoughts (no links + mature store)
-    %% Output: Promoted thoughts → existing or new Specialist
+    %% Output: Promoted thoughts → existing or new Strand
     %% ═══════════════════════════════════════════════════════════
     subgraph LIMBO_SG ["🌀 LIMBO  ·  background scan every 60 s"]
         direction TB
@@ -71,9 +71,9 @@ flowchart TB
         LB_CLU{Cluster ≥ 3\nsimilar thoughts?}:::limbo
         LB_NM[LLM: name + describe\nthe cluster]:::limbo
         LB_EP[Embed cluster purpose]:::limbo
-        LB_MAT{Existing specialist\nprofile match ≥ 0.8?}:::limbo
-        LB_PRO([Promote to\nmatching specialist]):::limbo
-        LB_NEW([Spawn new specialist]):::limbo
+        LB_MAT{Existing strand\nprofile match ≥ 0.8?}:::limbo
+        LB_PRO([Promote to\nmatching strand]):::limbo
+        LB_NEW([Spawn new strand]):::limbo
 
         LB_IN   --> LB_POOL
         LB_POOL --> LB_SIM
@@ -88,11 +88,11 @@ flowchart TB
     end
 
     %% ═══════════════════════════════════════════════════════════
-    %% SPECIALIST STORE
+    %% STRAND STORE
     %% Input:  Committed thoughts, GNN training signal
     %% Output: Graph + trained model ready for retrieval
     %% ═══════════════════════════════════════════════════════════
-    subgraph SPECIALIST ["🧠 SPECIALIST STORE"]
+    subgraph STRAND ["🧠 STRAND STORE"]
         direction TB
 
         subgraph SP_GRAPH ["Graph"]
@@ -107,7 +107,7 @@ flowchart TB
         subgraph SP_GNN ["GNN  ·  retrained async after each commit"]
             direction TB
             SP_BASE[Base MPNN\n3-layer message passing\nshared low LR]:::store
-            SP_STR[StrandLayer\nper-specialist fine-tuning\nadaptive LR]:::store
+            SP_STR[StrandLayer\nper-strand fine-tuning\nadaptive LR]:::store
             SP_BASE --> SP_STR
         end
 
@@ -125,14 +125,14 @@ flowchart TB
         Q_IN([Query]):::retrieval
         Q_EMB[Embed query]:::retrieval
 
-        subgraph Q_FANOUT ["Fan-out · all specialists sequentially"]
+        subgraph Q_FANOUT ["Fan-out · all strands sequentially"]
             direction LR
             Q_S1[GNN scoring\nbase MPNN + StrandLayer\nforward pass]:::retrieval
             Q_S2[Cosine similarity\nquery vs thought embeddings]:::retrieval
             Q_S3[Edge embedding search\nquery vs reasoning embeddings\n× 0.8 dampening]:::retrieval
         end
 
-        subgraph Q_MERGE ["Merge · per specialist"]
+        subgraph Q_MERGE ["Merge · per strand"]
             direction TB
             Q_WGT[Adaptive weighting\nGNN+edges: 0.4·cos + 0.4·gnn + 0.2·edge\nGNN only:  0.5·cos + 0.5·gnn\nCosine only: cos]:::retrieval
             Q_BST[Access boost\n+log1p·0.02 freq\n+0.05·exp recency]:::retrieval
@@ -140,14 +140,14 @@ flowchart TB
             Q_WGT --> Q_BST --> Q_THR
         end
 
-        subgraph Q_EXP ["Graph Traversal Expansion · per specialist"]
+        subgraph Q_EXP ["Graph Traversal Expansion · per strand"]
             direction TB
             Q_EXP_BFS[Bounded BFS from seeds\ndepth ≤ traversal_depth\nfan-out ≤ traversal_fan_out]:::retrieval
             Q_EXP_SCR[Score neighbours:\nedge.weight × edge_cos × thought_cos]:::retrieval
             Q_EXP_BFS --> Q_EXP_SCR
         end
 
-        Q_DED[Deduplicate across specialists\nbest score per thought text]:::retrieval
+        Q_DED[Deduplicate across strands\nbest score per thought text]:::retrieval
 
         Q_CTX[Assemble top-k context]:::retrieval
         Q_LLM[LLM: generate answer]:::retrieval
@@ -182,7 +182,7 @@ flowchart TB
 
     %% Limbo promotions → Store
     LB_PRO      -->|"add thoughts"| SP_T
-    LB_NEW      -->|"new graph + model"| SPECIALIST
+    LB_NEW      -->|"new graph + model"| STRAND
 
     %% Store feeds retrieval
     SP_T        -->|"thought embeddings"| Q_S2

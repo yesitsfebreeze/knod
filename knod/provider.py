@@ -137,8 +137,9 @@ class Provider:
 				{
 					"role": "system",
 					"content": (
-						"Given a cluster of related thoughts, suggest a specialist name "
-						'and purpose. Return JSON: {"name": "...", "purpose": "..."}'
+						"Given a cluster of related thoughts, suggest a short name "
+						"that describes the content and a one-sentence purpose. "
+						'Return JSON: {"name": "...", "purpose": "..."}'
 					),
 				},
 				{"role": "user", "content": f"Thoughts:\n{combined}"},

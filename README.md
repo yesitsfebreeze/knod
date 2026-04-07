@@ -26,7 +26,7 @@ query → embed → GNN scores + cosine search + edge search → merge → exter
 4. External LLM batch-evaluates link weights and reasoning for candidates.
 5. MCMC acceptance gate: early on, all thoughts are kept (exploration). As the graph matures toward a configured threshold, unconnected thoughts are increasingly rejected (specialization). Acceptance follows exponential decay: `1.0 * 0.05^maturity`.
 6. Accepted thoughts are added to the graph with edges above the min link weight.
-7. Rejected thoughts go to a limbo graph (if enabled) for potential specialist promotion.
+7. Rejected thoughts go to a limbo graph (if enabled) for potential strand promotion.
 8. GNN retrains on the updated graph. Checkpoint saved.
 
 ### Retrieval
@@ -44,11 +44,11 @@ When a question is asked:
 
 ### Multi-Store Queries
 
-`knod ask` spawns subprocesses — one per registered specialist graph. Each subprocess loads its graph, runs cosine similarity search, and returns scored results via stdout. The parent process merges, deduplicates, ranks, and calls the LLM for the final answer.
+`knod ask` spawns subprocesses — one per registered strand graph. Each subprocess loads its graph, runs cosine similarity search, and returns scored results via stdout. The parent process merges, deduplicates, ranks, and calls the LLM for the final answer.
 
-### Limbo & Specialist Promotion
+### Limbo & Strand Promotion
 
-Thoughts rejected by the MCMC gate are stored in a limbo graph. A background scan (every 60s) checks for clusters that exceed `limbo_cluster_min`. When a cluster is large enough, the external LLM suggests a name and purpose, and the cluster can be promoted to a new specialist store.
+Thoughts rejected by the MCMC gate are stored in a limbo graph. A background scan (every 60s) checks for clusters that exceed `limbo_cluster_min`. When a cluster is large enough, the external LLM suggests a name and purpose, and the cluster can be promoted to a new strand store.
 
 ## Modules
 
@@ -59,7 +59,7 @@ Thoughts rejected by the MCMC gate are stored in a limbo graph. A background sca
 | `provider/` | External LLM interface — OpenAI implementation with embedding, chat, decomposition, evaluation, linking, answer generation |
 | `ingest/` | Ingestion pipeline — decompose, embed, link, MCMC gate, limbo routing, cluster scanning |
 | `protocol/` | Request handling — TCP (prefix-based commands) and HTTP (REST API, background thread) |
-| `registry/` | Specialist store management — INI-format store/knid registry at `~/.config/knod/stores` |
+| `registry/` | Strand store management — INI-format store/knid registry at `~/.config/knod/stores` |
 | `config/` | Configuration — INI parsing from `~/.config/knod/config`, defaults for all parameters |
 | `cli/` | CLI subcommands — `new`, `register`, `list`, `knid`, `ask` |
 | `logger/` | Multi-channel file logging — knod.log, performance.log, error.log with rotation |
@@ -97,7 +97,7 @@ similarity_threshold = 0.7
 
 ```sh
 knod                        # start main process (TCP + HTTP + REPL)
-knod new                    # create a new specialist store
+knod new                    # create a new strand store
 knod register <path>        # register an existing graph file
 knod list                   # list all stores
 knod list --knid=<name>     # list stores in a knowledge cluster
@@ -165,5 +165,5 @@ All embeddings stored as `[1536]f32`. Strings as length-prefixed byte arrays.
 - **Thoughts are atomic.** One idea per node. Small nodes enable precise retrieval.
 - **Hybrid by design.** Local GNN for fast navigation, external LLM for reasoning. Neither is optional.
 - **MCMC drives specialization.** Acceptance gating — not pruning — shapes what a graph keeps.
-- **One executable, many specialists.** Single binary, one store per graph file, subprocess-based fan-out for queries.
+- **One executable, many strands.** Single binary, one store per graph file, subprocess-based fan-out for queries.
 - **Simple persistence.** Binary files, no database.

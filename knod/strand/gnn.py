@@ -1,4 +1,4 @@
-"""Base MPNN (3-layer message passing) + StrandLayer (per-specialist fine-tuning)."""
+"""Base MPNN (3-layer message passing) + StrandLayer (per-strand fine-tuning)."""
 
 import torch
 import torch.nn as nn

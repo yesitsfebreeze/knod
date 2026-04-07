@@ -2,8 +2,8 @@ import logging
 
 from ..config import Config
 from ..provider import Provider
-from ..specialist.graph import Graph
-from ..specialist.types import IngestResult
+from ..strand.graph import Graph
+from ..strand.types import IngestResult
 from .prepare import prepare
 from .snapshot import snapshot
 from .dedup import dedup

@@ -1,14 +1,14 @@
-"""Limbo promote — route a cluster to an existing specialist or spawn a new one.
+"""Limbo promote — route a cluster to an existing strand or spawn a new one.
 
 Matches FLOW.md LIMBO subgraph:
   LB_NM  — LLM: name + describe the cluster
   LB_EP  — Embed cluster purpose
-  LB_MAT — Existing specialist profile match ≥ specialist_match_threshold?
-  LB_PRO — Promote to matching specialist
-  LB_NEW — Spawn new specialist
+  LB_MAT — Existing strand profile match ≥ strand_match_threshold?
+  LB_PRO — Promote to matching strand
+  LB_NEW — Spawn new strand
 
 After promotion or spawn, runs Phase 3 (link) + GNN training so the
-specialist starts with proper edges and trained weights.
+strand starts with proper edges and trained weights.
 """
 
 import logging
@@ -19,10 +19,10 @@ import numpy as np
 from ..config import Config
 from ..provider import Provider
 from ..registry import store_path
-from ..specialist.graph import Graph, LimboThought
-from ..specialist.gnn import KnodMPNN, StrandLayer
-from ..specialist.store import save_all, load_base_model
-from ..specialist.types import Specialist
+from ..strand.graph import Graph, LimboThought
+from ..strand.gnn import KnodMPNN, StrandLayer
+from ..strand.store import save_all, load_base_model
+from ..strand.types import Strand
 from ..util.math import cosine
 
 log = logging.getLogger(__name__)
@@ -38,7 +38,7 @@ def bootstrap_thoughts(
 ):
 	"""Link a set of thoughts to their neighbors in the graph and train GNN.
 
-	Called after spawning a new specialist or promoting thoughts to an existing one.
+	Called after spawning a new strand or promoting thoughts to an existing one.
 	Runs Phase 3 (link reasoning) on the given thoughts, adds edges, then trains.
 	"""
 	if len(thought_ids) < 2 or graph.num_thoughts < 2:
@@ -84,7 +84,7 @@ def bootstrap_thoughts(
 	log.info("Bootstrap: added %d edges for %d thoughts", edges_added, len(prepared))
 
 	if graph.num_edges > 0:
-		from ..specialist.trainer import GNNTrainer
+		from ..strand.trainer import GNNTrainer
 
 		# Load latest shared base weights before training (bidirectional sync)
 		load_base_model(model)
@@ -95,15 +95,15 @@ def bootstrap_thoughts(
 
 def promote_cluster(
 	cluster: list[LimboThought],
-	specialists: dict,  # dict[str, Specialist]
+	strands: dict,  # dict[str, Strand]
 	provider: Provider,
 	cfg: Config,
 	registry,
 	graph_base_path: str,
 ) -> str | None:
-	"""Promote a limbo cluster: try existing specialist, else spawn new one.
+	"""Promote a limbo cluster: try existing strand, else spawn new one.
 
-	Returns the specialist name the cluster was promoted into (or None on error).
+	Returns the strand name the cluster was promoted into (or None on error).
 	After promotion, runs bootstrap (Phase 3 + GNN training) and saves.
 	"""
 	texts = [lt.text for lt in cluster]
@@ -112,48 +112,48 @@ def promote_cluster(
 	best_match = None
 	best_sim = 0.0
 
-	if specialists:
+	if strands:
 		purpose_emb = provider.embed_text(purpose)
-		for sname, spec in specialists.items():
-			if spec.graph.profile is not None:
-				sim = cosine(spec.graph.profile, purpose_emb)
+		for sname, strand in strands.items():
+			if strand.graph.profile is not None:
+				sim = cosine(strand.graph.profile, purpose_emb)
 				if sim > best_sim:
 					best_sim = sim
 					best_match = sname
 
-	if best_match and best_sim >= cfg.specialist_match_threshold:
-		spec = specialists[best_match]
+	if best_match and best_sim >= cfg.strand_match_threshold:
+		strand = strands[best_match]
 		new_ids = []
 		for lt in cluster:
-			t = spec.graph.add_thought(lt.text, lt.embedding, lt.source)
+			t = strand.graph.add_thought(lt.text, lt.embedding, lt.source)
 			if t:
 				new_ids.append(t.id)
 		# Bootstrap: link + train
-		bootstrap_thoughts(new_ids, spec.graph, spec.model, spec.strand, provider, cfg)
-		# Save specialist
+		bootstrap_thoughts(new_ids, strand.graph, strand.model, strand.strand, provider, cfg)
+		# Save strand
 		graph_path = registry.stores[best_match]["path"]
 		base = Path(graph_path).with_suffix("")
-		save_all(spec.graph, spec.model, spec.strand, base)
-		log.info("Promoted %d limbo thoughts to specialist '%s'", len(cluster), best_match)
+		save_all(strand.graph, strand.model, strand.strand, base)
+		log.info("Promoted %d limbo thoughts to strand '%s'", len(cluster), best_match)
 		return best_match
 	else:
-		return _spawn_specialist(name, purpose, cluster, specialists, provider, cfg, registry, graph_base_path)
+		return _spawn_strand(name, purpose, cluster, strands, provider, cfg, registry, graph_base_path)
 
 
-def _spawn_specialist(
+def _spawn_strand(
 	name: str,
 	purpose: str,
 	cluster: list[LimboThought],
-	specialists: dict,
+	strands: dict,
 	provider: Provider,
 	cfg: Config,
 	registry,
 	graph_base_path: str,
 ) -> str:
-	"""Create a new specialist graph from a limbo cluster, link thoughts, and train."""
-	from ..specialist.graph import Graph as SpecGraph
+	"""Create a new strand graph from a limbo cluster, link thoughts, and train."""
+	from ..strand.graph import Graph as StrandGraph
 
-	graph = SpecGraph(
+	graph = StrandGraph(
 		name=name,
 		purpose=purpose,
 		max_thoughts=cfg.max_thoughts,
@@ -163,7 +163,7 @@ def _spawn_specialist(
 	model = KnodMPNN(cfg)
 	strand = StrandLayer(cfg.hidden_dim)
 
-	# Inherit global base weights so the specialist starts with global knowledge
+	# Inherit global base weights so the strand starts with global knowledge
 	load_base_model(model)
 
 	new_ids = []
@@ -183,12 +183,12 @@ def _spawn_specialist(
 	graph_path = str(hashed_path)
 	registry.register(graph_path)
 
-	specialists[name] = Specialist(
+	strands[name] = Strand(
 		name=name,
 		purpose=purpose,
 		graph=graph,
 		model=model,
 		strand=strand,
 	)
-	log.info("Spawned new specialist '%s' with %d thoughts, %d edges", name, len(cluster), graph.num_edges)
+	log.info("Spawned new strand '%s' with %d thoughts, %d edges", name, len(cluster), graph.num_edges)
 	return name

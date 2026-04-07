@@ -1,7 +1,8 @@
 from ..config import Config
-from ..specialist.graph import Graph
+from ..strand.graph import Graph
 from ..util.math import cosine
 from .prepare import PreparedArticle
+
 
 def snapshot(article: PreparedArticle, graph: Graph, cfg: Config):
 	for i, pt in enumerate(article.thoughts):

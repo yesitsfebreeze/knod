@@ -11,7 +11,7 @@ from .config import Config
 
 
 def main():
-	parser = argparse.ArgumentParser(prog="py_knod", description="Knowledge graph with GNN")
+	parser = argparse.ArgumentParser(prog="knod", description="Knowledge graph with GNN")
 	parser.add_argument("-v", "--verbose", action="store_true")
 	sub = parser.add_subparsers(dest="command")
 
@@ -49,8 +49,8 @@ def main():
 	corpus_cmd.add_argument("--dir", type=str, default="corpus")
 	corpus_cmd.add_argument("--graph", type=str, default=None)
 
-	# new — create a new specialist interactively
-	new_cmd = sub.add_parser("new", help="Create a new specialist graph")
+	# new — create a new strand interactively
+	new_cmd = sub.add_parser("new", help="Create a new strand graph")
 	new_cmd.add_argument("--knid", type=str, default=None, help="Add to knid group")
 
 	# register — register an existing graph file
@@ -183,7 +183,14 @@ def _do_serve(cfg: Config, args):
 		signal.signal(signal.SIGTERM, shutdown_handler)
 
 		log.info("http: starting on :%d", cfg.http_port)
-		uvicorn.run(_http, host="0.0.0.0", port=cfg.http_port, log_level="warning")
+		log_config = {
+			"version": 1,
+			"disable_existing_loggers": False,
+			"formatters": {"default": {"()": "logging.Formatter", "fmt": "%(levelname)s %(message)s"}},
+			"handlers": {"default": {"class": "logging.StreamHandler", "formatter": "default", "stream": "ext://sys.stderr"}},
+			"root": {"level": "WARNING", "handlers": ["default"]},
+		}
+		uvicorn.run(_http, host="0.0.0.0", port=cfg.http_port, log_level="warning", log_config=log_config)
 	else:
 		log.info("http: disabled")
 
@@ -232,7 +239,7 @@ def _do_ingest_file(cfg: Config, filepath: str, descriptor: str = "", knid: str 
 			return
 		for sname in store_names:
 			try:
-				n = handler.ingest_into_specialist(sname, text, source=Path(filepath).stem, descriptor=descriptor)
+				n = handler.ingest_into_strand(sname, text, source=Path(filepath).stem, descriptor=descriptor)
 				print(f"  {sname}: {n} thoughts committed")
 			except KeyError:
 				print(f"  {sname}: not loaded, skipping")
@@ -314,7 +321,7 @@ def _do_ingest_corpus(cfg: Config, corpus_dir: str):
 
 
 def _do_new(cfg: Config, knid: str | None = None):
-	"""Interactive: create a new specialist graph."""
+	"""Interactive: create a new strand graph."""
 	purpose = input("Purpose: ").strip()
 	if not purpose:
 		print("Purpose is required.")
@@ -330,19 +337,19 @@ def _do_new(cfg: Config, knid: str | None = None):
 		location = str(Path.cwd())
 
 	handler = _load_handler(cfg)
-	graph_path = handler.create_specialist(name, purpose, location, knid=knid)
+	graph_path = handler.create_strand(name, purpose, location, knid=knid)
 
 	if knid:
 		print(f"Added to knid '{knid}'")
 
-	print(f"Created specialist '{name}' at {graph_path}")
+	print(f"Created strand '{name}' at {graph_path}")
 	handler.shutdown()
 
 
 def _do_register(cfg: Config, path: str, knid: str | None = None):
 	"""Register an existing graph file."""
 	from .registry import Registry
-	from .specialist.store import read_knod_metadata
+	from .strand.store import read_knod_metadata
 
 	graph_path = Path(path)
 	if not graph_path.exists():

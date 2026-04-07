@@ -12,8 +12,8 @@ import numpy as np
 import torch
 
 from ..config import Config
-from ..specialist.graph import Graph
-from ..specialist.gnn import KnodMPNN, StrandLayer
+from ..strand.graph import Graph
+from ..strand.gnn import KnodMPNN, StrandLayer
 from ..util.math import cosine
 
 log = logging.getLogger(__name__)

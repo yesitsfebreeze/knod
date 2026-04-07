@@ -38,7 +38,7 @@ SECTION_MODEL = 0x02
 SECTION_LIMBO = 0x03
 SECTION_REGISTRY = 0x04
 
-# ---- Per-specialist model checkpoints (.pt) ----
+# ---- Per-strand model checkpoints (.pt) ----
 
 
 # --- Graph serialisation helpers ---
@@ -86,7 +86,7 @@ def graph_from_state(state: dict, *, maturity_divisor: int = 50) -> Graph:
 
 
 def save_model(model: KnodMPNN, strand: StrandLayer, path: str | Path):
-	"""Save model + strand checkpoint (per-specialist .pt file)."""
+	"""Save model + strand checkpoint (per-strand .pt file)."""
 	path = Path(path)
 	path.parent.mkdir(parents=True, exist_ok=True)
 	torch.save(

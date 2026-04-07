@@ -1,4 +1,4 @@
-"""Handler — owns all specialists; orchestrates ingest, limbo, and retrieval."""
+"""Handler — owns all strands; orchestrates ingest, limbo, and retrieval."""
 
 import logging
 import threading
@@ -11,11 +11,11 @@ import numpy as np
 from .config import Config
 from .provider import Provider
 from .registry import Registry, store_path
-from .specialist.graph import Graph, Thought
-from .specialist.gnn import KnodMPNN, StrandLayer
-from .specialist.trainer import GNNTrainer
-from .specialist.types import GraphEvent, EventListener, SpecialistIndexEntry, Specialist, IngestResult
-from .specialist.store import save_all, load_all, load_base_model, read_knod_metadata
+from .strand.graph import Graph, Thought
+from .strand.gnn import KnodMPNN, StrandLayer
+from .strand.trainer import GNNTrainer
+from .strand.types import GraphEvent, EventListener, StrandIndexEntry, Strand, IngestResult
+from .strand.store import save_all, load_all, load_base_model, read_knod_metadata
 from .util.math import cosine
 from .ingest import Ingester
 from .limbo import find_clusters, promote_cluster
@@ -48,8 +48,8 @@ class Handler:
 		self.strand: StrandLayer | None = None
 		self.trainer: GNNTrainer | None = None
 		self.ingester: Ingester | None = None
-		self._specialists: dict[str, Specialist] = {}
-		self._index: dict[str, SpecialistIndexEntry] = {}  # specialist name → index entry
+		self._strands: dict[str, Strand] = {}
+		self._index: dict[str, StrandIndexEntry] = {}  # strand name → index entry
 		self.mu = threading.Lock()
 		self._queue: Queue | None = None
 		self._queue_worker: threading.Thread | None = None
@@ -81,8 +81,8 @@ class Handler:
 		self.trainer = GNNTrainer(self.model, self.strand, self.cfg)
 		self.ingester = Ingester(self.graph, self.provider, self.cfg)
 
-		# Load registered specialists
-		self._load_specialists()
+		# Load registered strands
+		self._load_strands()
 
 		# Start async ingest queue
 		self._queue = Queue(maxsize=QUEUE_CAPACITY)
@@ -138,7 +138,7 @@ class Handler:
 			if self.cfg.decay_coefficient > 0:
 				self.graph.apply_edge_decay(self.cfg.decay_coefficient)
 			if result.committed and self.graph.num_edges > 0:
-				# Reload base model (may have been updated by specialist training)
+				# Reload base model (may have been updated by strand training)
 				load_base_model(self.model)
 				loss = self.trainer.train_on_graph(self.graph)
 				log.info("GNN training loss: %.4f", loss)
@@ -177,8 +177,8 @@ class Handler:
 	def ask(self, query: str, knid: str | None = None) -> tuple[str, list[dict]]:
 		"""Retrieval pipeline: score + expand → deduplicate → rate → answer.
 
-		When `knid` is provided, only specialists in that knid group are queried.
-		Otherwise, the default graph + all registered specialists are queried.
+		When `knid` is provided, only strands in that knid group are queried.
+		Otherwise, the default graph + all registered strands are queried.
 		"""
 		query_emb = self.provider.embed_text(query)
 
@@ -186,36 +186,36 @@ class Handler:
 		all_chains: list[PathChain] = []
 
 		if knid:
-			# Scoped query: only specialists in this knid
+			# Scoped query: only strands in this knid
 			store_names = self.registry.stores_in_knid(knid)
 			for sname in store_names:
-				spec = self._specialists.get(sname)
-				if spec is None:
+				strand = self._strands.get(sname)
+				if strand is None:
 					continue
 				try:
-					spec_scored, spec_chains = self._score_specialist(query_emb, spec.graph, spec.model, spec.strand)
-					all_scored.append(spec_scored)
-					all_chains.extend(spec_chains)
+					strand_scored, strand_chains = self._score_strand(query_emb, strand.graph, strand.model, strand.strand)
+					all_scored.append(strand_scored)
+					all_chains.extend(strand_chains)
 				except Exception:
-					log.warning("Specialist '%s' query failed", sname, exc_info=True)
+					log.warning("Strand '%s' query failed", sname, exc_info=True)
 		else:
-			# Full query: default graph + all specialists
-			local_scored, local_chains = self._score_specialist(query_emb, self.graph, self.model, self.strand)
+			# Full query: default graph + all strands
+			local_scored, local_chains = self._score_strand(query_emb, self.graph, self.model, self.strand)
 			all_scored.append(local_scored)
 			all_chains.extend(local_chains)
 
-			for name, spec in self._specialists.items():
-				if spec.graph.profile is not None:
-					sim = cosine(spec.graph.profile, query_emb)
-					log.debug("Specialist '%s' profile sim=%.3f", name, sim)
+			for name, strand in self._strands.items():
+				if strand.graph.profile is not None:
+					sim = cosine(strand.graph.profile, query_emb)
+					log.debug("Strand '%s' profile sim=%.3f", name, sim)
 				try:
-					spec_scored, spec_chains = self._score_specialist(query_emb, spec.graph, spec.model, spec.strand)
-					all_scored.append(spec_scored)
-					all_chains.extend(spec_chains)
+					strand_scored, strand_chains = self._score_strand(query_emb, strand.graph, strand.model, strand.strand)
+					all_scored.append(strand_scored)
+					all_chains.extend(strand_chains)
 				except Exception:
-					log.warning("Specialist '%s' query failed", name, exc_info=True)
+					log.warning("Strand '%s' query failed", name, exc_info=True)
 
-		# Deduplicate across specialists
+		# Deduplicate across strands
 		scored = deduplicate(all_scored, self.cfg.top_k)
 		if not scored:
 			return "No relevant knowledge found.", []
@@ -246,8 +246,8 @@ class Handler:
 				dampen=self.cfg.refinement_dampen,
 				min_traversals=self.cfg.refinement_min_traversals,
 			)
-			for spec in self._specialists.values():
-				spec.graph.refine_edges(
+			for strand in self._strands.values():
+				strand.graph.refine_edges(
 					boost=self.cfg.refinement_boost,
 					dampen=self.cfg.refinement_dampen,
 					min_traversals=self.cfg.refinement_min_traversals,
@@ -257,13 +257,13 @@ class Handler:
 		return text, sources
 
 	def find_thoughts_by_query(self, query: str, k: int = 5) -> list[dict]:
-		"""Embed query and search for semantically similar thoughts across all specialists."""
+		"""Embed query and search for semantically similar thoughts across all strands."""
 		emb = self.provider.embed_text(query)
 		# Search global graph
 		all_neighbors: list[tuple] = list(self.graph.find_thoughts(emb, k=k, threshold=self.cfg.similarity_threshold))
-		# Search every specialist
-		for spec in self._specialists.values():
-			all_neighbors.extend(spec.graph.find_thoughts(emb, k=k, threshold=self.cfg.similarity_threshold))
+		# Search every strand
+		for strand in self._strands.values():
+			all_neighbors.extend(strand.graph.find_thoughts(emb, k=k, threshold=self.cfg.similarity_threshold))
 		# Sort by similarity descending, deduplicate by text, return top-k
 		seen: set[str] = set()
 		results = []
@@ -305,8 +305,8 @@ class Handler:
 		"""Resolve a descriptor name to its text. Returns '' if not found."""
 		return self.graph.descriptors.get(name, "")
 
-	def create_specialist(self, name: str, purpose: str, location: str, knid: str | None = None) -> str:
-		"""Create a new specialist graph, save it, and register it.
+	def create_strand(self, name: str, purpose: str, location: str, knid: str | None = None) -> str:
+		"""Create a new strand graph, save it, and register it.
 
 		Returns the graph file path.
 		"""
@@ -331,28 +331,28 @@ class Handler:
 
 		return graph_path
 
-	def ingest_into_specialist(
+	def ingest_into_strand(
 		self,
-		specialist_name: str,
+		strand_name: str,
 		text: str,
 		source: str = "",
 		descriptor: str = "",
 	) -> int:
-		"""Ingest text directly into a named specialist graph. Returns number committed."""
-		spec = self._specialists.get(specialist_name)
-		if spec is None:
-			raise KeyError(f"Specialist '{specialist_name}' not loaded")
-		ingester = Ingester(spec.graph, self.provider, self.cfg)
+		"""Ingest text directly into a named strand graph. Returns number committed."""
+		s = self._strands.get(strand_name)
+		if s is None:
+			raise KeyError(f"Strand '{strand_name}' not loaded")
+		ingester = Ingester(s.graph, self.provider, self.cfg)
 		result = ingester.ingest(text, source=source, descriptor=descriptor)
 		return len(result.committed)
 
 	def ingested_sources(self) -> set[str]:
-		"""Return the set of all source strings already in the graph and all specialists."""
+		"""Return the set of all source strings already in the graph and all strands."""
 		sources: set[str] = set()
 		for t in self.graph.thoughts.values():
 			sources.add(t.source)
-		for spec in self._specialists.values():
-			for t in spec.graph.thoughts.values():
+		for strand in self._strands.values():
+			for t in strand.graph.thoughts.values():
 				sources.add(t.source)
 		return sources
 
@@ -377,21 +377,24 @@ class Handler:
 		nodes = []
 		edges = []
 		seen_edge_keys: set[tuple[str, str]] = set()
+		thought_vectors: list[tuple[dict, np.ndarray]] = []
 
 		def _collect(graph, store: str):
 			prefix = "" if store == "global" else f"{store}:"
-			for t in graph.thoughts.values():
-				nodes.append(
-					{
-						"key": f"{prefix}{t.id}",
-						"label": t.text[:80],
-						"source": t.source,
-						"store": store,
-						"access_count": t.access_count,
-						"created_at": t.created_at,
-					}
-				)
-			for e in graph.edges:
+			for t in sorted(graph.thoughts.values(), key=lambda thought: thought.id):
+				node = {
+					"key": f"{prefix}{t.id}",
+					"label": t.text[:80],
+					"source": t.source,
+					"store": store,
+					"access_count": t.access_count,
+					"created_at": t.created_at,
+					"last_accessed": t.last_accessed,
+				}
+				nodes.append(node)
+				if t.embedding is not None and len(t.embedding) > 0:
+					thought_vectors.append((node, np.asarray(t.embedding, dtype=float).ravel()))
+			for e in sorted(graph.edges, key=lambda edge: (edge.source_id, edge.target_id, edge.created_at)):
 				key = (f"{prefix}{e.source_id}", f"{prefix}{e.target_id}")
 				if key in seen_edge_keys:
 					continue
@@ -403,28 +406,51 @@ class Handler:
 						"weight": round(e.weight, 3),
 						"reasoning": e.reasoning[:120],
 						"success_rate": round(e.success_rate, 3),
+						"traversal_count": e.traversal_count,
+						"created_at": e.created_at,
+						"source_name": e.source,
 					}
 				)
 
 		_collect(self.graph, "global")
-		for name, spec in self._specialists.items():
-			_collect(spec.graph, name)
+		for name, strand in sorted(self._strands.items()):
+			_collect(strand.graph, name)
 
-		# Add specialist hub nodes and link each specialist's thoughts to it
-		for name, spec in self._specialists.items():
-			hub_key = f"_spec:{name}"
+		if thought_vectors:
+			min_dim = min(vec.shape[0] for _, vec in thought_vectors)
+			matrix = np.stack([vec[:min_dim] for _, vec in thought_vectors])
+			centered = matrix - matrix.mean(axis=0, keepdims=True)
+			coords = centered[:, :3] if min_dim >= 3 else centered
+			if centered.shape[0] >= 2 and min_dim > 0:
+				try:
+					_, _, vt = np.linalg.svd(centered, full_matrices=False)
+					basis = vt[: min(3, vt.shape[0])]
+					coords = centered @ basis.T
+				except np.linalg.LinAlgError:
+					coords = centered[:, : min(3, centered.shape[1])]
+			if coords.shape[1] < 3:
+				coords = np.pad(coords, ((0, 0), (0, 3 - coords.shape[1])))
+			scale = np.percentile(np.abs(coords), 95, axis=0)
+			scale[scale < 1e-6] = 1.0
+			normalized = np.clip(coords / scale, -1.5, 1.5)
+			for (node, _), pos in zip(thought_vectors, normalized, strict=False):
+				node["embed_pos"] = [round(float(v), 4) for v in pos[:3]]
+
+		# Add strand hub nodes and link each strand's thoughts to it
+		for name, strand in self._strands.items():
+			hub_key = f"_strand:{name}"
 			nodes.append(
 				{
 					"key": hub_key,
 					"label": name,
 					"source": "",
 					"store": name,
-					"type": "specialist",
+					"type": "strand",
 					"access_count": 0,
 					"created_at": 0,
 				}
 			)
-			for t in spec.graph.thoughts.values():
+			for t in strand.graph.thoughts.values():
 				edge_key = (hub_key, f"{name}:{t.id}")
 				if edge_key not in seen_edge_keys:
 					seen_edge_keys.add(edge_key)
@@ -441,18 +467,11 @@ class Handler:
 		# Compute k-nearest-neighbor edges based on embedding cosine similarity
 		knn_edges = []
 		# Collect all thoughts with their embeddings and prefixed keys
-		all_thoughts = []
-		def _collect_thoughts(graph, store: str):
-			prefix = "" if store == "global" else f"{store}:"
-			for t in graph.thoughts.values():
-				if t.embedding is not None and len(t.embedding) > 0:
-					all_thoughts.append((f"{prefix}{t.id}", t.embedding))
-		_collect_thoughts(self.graph, "global")
-		for name, spec in self._specialists.items():
-			_collect_thoughts(spec.graph, name)
+		all_thoughts = [(node["key"], vec) for node, vec in thought_vectors]
 
 		if len(all_thoughts) > 1:
 			from .util.math import cosine
+
 			k = min(3, len(all_thoughts) - 1)
 			for i, (key_i, emb_i) in enumerate(all_thoughts):
 				sims = []
@@ -466,14 +485,18 @@ class Handler:
 					rev_key = (key_j, key_i)
 					if edge_key not in seen_edge_keys and rev_key not in seen_edge_keys:
 						seen_edge_keys.add(edge_key)
-						knn_edges.append({
-							"source": key_i,
-							"target": key_j,
-							"weight": round(max(0.0, sim), 3),
-							"reasoning": "embedding similarity",
-							"success_rate": 0.0,
-							"type": "knn",
-						})
+						knn_edges.append(
+							{
+								"source": key_i,
+								"target": key_j,
+								"weight": round(max(0.0, sim), 3),
+								"reasoning": "embedding similarity",
+								"success_rate": 0.0,
+								"traversal_count": 0,
+								"created_at": 0,
+								"type": "knn",
+							}
+						)
 
 		return {"nodes": nodes, "edges": edges, "knn_edges": knn_edges}
 
@@ -482,7 +505,7 @@ class Handler:
 	def relink(self) -> dict:
 		"""Scan all thoughts and create missing edges between similar pairs.
 
-		Works on the global graph and all specialists. Uses the LLM to
+		Works on the global graph and all strands. Uses the LLM to
 		generate link reasoning for newly discovered connections.
 		"""
 		total_created = 0
@@ -553,8 +576,8 @@ class Handler:
 
 		with self.mu:
 			total_created += _relink_graph(self.graph)
-			for name, spec in self._specialists.items():
-				total_created += _relink_graph(spec.graph)
+			for name, strand in self._strands.items():
+				total_created += _relink_graph(strand.graph)
 
 			if total_created > 0:
 				self.save()
@@ -572,18 +595,18 @@ class Handler:
 	def explore_thought(self, thought_id: int) -> dict | None:
 		"""Return a thought with its edges and neighbors, or None if not found.
 
-		Searches the global graph and all specialists.
+		Searches the global graph and all strands.
 		"""
 		# Search global graph first
 		graph, store = self.graph, "global"
 		thought = graph.thoughts.get(thought_id)
 
-		# If not in global, search specialists
+		# If not in global, search strands
 		if thought is None:
-			for name, spec in self._specialists.items():
-				thought = spec.graph.thoughts.get(thought_id)
+			for name, strand in self._strands.items():
+				thought = strand.graph.thoughts.get(thought_id)
 				if thought is not None:
-					graph, store = spec.graph, name
+					graph, store = strand.graph, name
 					break
 
 		if thought is None:
@@ -619,14 +642,14 @@ class Handler:
 	def traverse(self, start_id: int, depth: int = 2, max_nodes: int = 50) -> dict | None:
 		"""BFS from a thought, returning the local subgraph.
 
-		Searches across the global graph and all specialists.
+		Searches across the global graph and all strands.
 		"""
 		# Find the starting thought and its graph
 		graph, store = self.graph, "global"
 		if start_id not in graph.thoughts:
-			for name, spec in self._specialists.items():
-				if start_id in spec.graph.thoughts:
-					graph, store = spec.graph, name
+			for name, strand in self._strands.items():
+				if start_id in strand.graph.thoughts:
+					graph, store = strand.graph, name
 					break
 			else:
 				return None
@@ -684,7 +707,7 @@ class Handler:
 		}
 
 	def graph_stats(self) -> dict:
-		"""Aggregate statistics across the global graph and all specialists."""
+		"""Aggregate statistics across the global graph and all strands."""
 
 		def _edge_stats(edges):
 			if not edges:
@@ -707,28 +730,28 @@ class Handler:
 				"avg_edge_weight": avg_w,
 				"avg_edge_success_rate": avg_sr,
 			},
-			"specialists": [],
+			"strands": [],
 		}
 		for name, entry in self._index.items():
-			spec = self._specialists.get(name)
-			spec_entry = {
+			strand = self._strands.get(name)
+			strand_entry = {
 				"name": entry.name,
 				"purpose": entry.purpose,
 				"thoughts": entry.num_thoughts,
 				"edges": entry.num_edges,
 			}
-			if spec:
-				sw, ssr = _edge_stats(spec.graph.edges)
-				spec_entry["maturity"] = round(spec.graph.maturity, 3)
-				spec_entry["avg_edge_weight"] = sw
-				spec_entry["avg_edge_success_rate"] = ssr
-			stats["specialists"].append(spec_entry)
+			if strand:
+				sw, ssr = _edge_stats(strand.graph.edges)
+				strand_entry["maturity"] = round(strand.graph.maturity, 3)
+				strand_entry["avg_edge_weight"] = sw
+				strand_entry["avg_edge_success_rate"] = ssr
+			stats["strands"].append(strand_entry)
 
-		stats["total_specialists"] = len(self._index)
+		stats["total_strands"] = len(self._index)
 		return stats
 
-	def list_specialists(self) -> list[dict]:
-		"""Return metadata for all loaded specialists, including knid membership."""
+	def list_strands(self) -> list[dict]:
+		"""Return metadata for all loaded strands, including knid membership."""
 		# Build reverse index: store_name → list of knids it belongs to
 		knid_membership: dict[str, list[str]] = {}
 		for knid_name, members in self.registry.knids.items():
@@ -773,19 +796,19 @@ class Handler:
 			except Exception:
 				log.exception("Event listener raised for kind=%s", event.kind)
 
-	# ---- specialist management ----
+	# ---- strand management ----
 
-	def _upsert_specialist_node(self, name: str, spec: "Specialist"):
-		"""Upsert a registry node for this specialist in the global graph.
+	def _upsert_strand_node(self, name: str, strand: "Strand"):
+		"""Upsert a registry node for this strand in the global graph.
 
-		Embeds the specialist's aggregate profile as a thought in the global graph
-		so the GNN learns where each specialist lives in the full knowledge network.
+		Embeds the strand's aggregate profile as a thought in the global graph
+		so the GNN learns where each strand lives in the full knowledge network.
 		"""
-		if spec.graph.profile is None:
+		if strand.graph.profile is None:
 			return
 
-		profile = spec.graph.profile.copy()
-		text = f"[specialist:{name}] {spec.purpose}"
+		profile = strand.graph.profile.copy()
+		text = f"[strand:{name}] {strand.purpose}"
 
 		existing_tid = self.graph._registry_nodes.get(name)
 		if existing_tid and existing_tid in self.graph.thoughts:
@@ -795,7 +818,7 @@ class Handler:
 			self.graph._update_profile(profile)
 		else:
 			# Create new registry node + edges to nearby global thoughts
-			t = self.graph.add_thought(text, profile, source=f"specialist:{name}")
+			t = self.graph.add_thought(text, profile, source=f"strand:{name}")
 			if t is None:
 				return
 			self.graph._registry_nodes[name] = t.id
@@ -806,29 +829,31 @@ class Handler:
 						source_id=t.id,
 						target_id=neighbor.id,
 						weight=sim,
-						reasoning=f"Specialist '{name}' covers this topic",
+						reasoning=f"Strand '{name}' covers this topic",
 						embedding=profile,
 					)
 
-	def _load_specialists(self):
-		"""Load all registered specialists into cache, build index, and upsert registry nodes."""
+	def _load_strands(self):
+		"""Load all registered strands into cache, build index, and upsert registry nodes."""
+		stale: list[str] = []
 		for name, entry in self.registry.stores.items():
 			try:
 				graph_path = entry["path"]
 				if not Path(graph_path).exists():
-					log.warning("Specialist '%s' graph not found: %s", name, graph_path)
+					log.warning("Strand '%s' graph not found, removing: %s", name, graph_path)
+					stale.append(name)
 					continue
 				base = Path(graph_path).with_suffix("")
-				graph, model, strand = load_all(self.cfg, base)
-				self._specialists[name] = Specialist(
+				graph, model, strand_layer = load_all(self.cfg, base)
+				self._strands[name] = Strand(
 					name=name,
 					purpose=entry.get("purpose", "") or graph.purpose,
 					graph=graph,
 					model=model,
-					strand=strand,
+					strand=strand_layer,
 				)
 				# Build index entry from loaded graph metadata
-				self._index[name] = SpecialistIndexEntry(
+				self._index[name] = StrandIndexEntry(
 					name=name,
 					purpose=graph.purpose,
 					descriptors=dict(graph.descriptors),
@@ -836,24 +861,29 @@ class Handler:
 					num_thoughts=graph.num_thoughts,
 					num_edges=graph.num_edges,
 				)
-				log.info("Loaded specialist '%s' (%d thoughts, %d edges)", name, graph.num_thoughts, graph.num_edges)
+				log.info("Loaded strand '%s' (%d thoughts, %d edges)", name, graph.num_thoughts, graph.num_edges)
 			except Exception:
-				log.warning("Failed to load specialist '%s'", name, exc_info=True)
+				log.warning("Failed to load strand '%s'", name, exc_info=True)
 
-		log.info("Specialist index: %d entries loaded", len(self._index))
+		for name in stale:
+			self.registry.unregister(name)
+		if stale:
+			log.info("Removed %d stale strand(s) from registry", len(stale))
 
-		# Upsert registry nodes so the global graph knows about all specialists
-		for name, spec in self._specialists.items():
-			self._upsert_specialist_node(name, spec)
+		log.info("Strand index: %d entries loaded", len(self._index))
 
-	def _score_specialist(
+		# Upsert registry nodes so the global graph knows about all strands
+		for name, strand in self._strands.items():
+			self._upsert_strand_node(name, strand)
+
+	def _score_strand(
 		self,
 		query_emb,
 		graph: Graph,
 		model: KnodMPNN,
 		strand: StrandLayer,
 	) -> tuple[list[tuple], list[PathChain]]:
-		"""Run all three scoring signals + merge + expand for one specialist.
+		"""Run all three scoring signals + merge + expand for one strand.
 
 		Returns (scored_thoughts, path_chains).
 
@@ -911,37 +941,37 @@ class Handler:
 			return
 
 		promoted_indices: set[int] = set()
-		modified_specialists: set[str] = set()
+		modified_strands: set[str] = set()
 		for cluster_indices in clusters:
 			cluster_thoughts = [self.graph.limbo[i] for i in cluster_indices]
 			try:
-				spec_name = promote_cluster(
+				strand_name = promote_cluster(
 					cluster_thoughts,
-					self._specialists,
+					self._strands,
 					self.provider,
 					self.cfg,
 					self.registry,
 					self.cfg.graph_path,
 				)
 				promoted_indices.update(cluster_indices)
-				if spec_name:
-					modified_specialists.add(spec_name)
+				if strand_name:
+					modified_strands.add(strand_name)
 			except Exception:
 				log.exception("Cluster promotion failed")
 
 		if promoted_indices:
 			self.graph.limbo = [lt for i, lt in enumerate(self.graph.limbo) if i not in promoted_indices]
 
-		# Upsert registry nodes for modified specialists into global graph
-		for spec_name in modified_specialists:
-			if spec_name in self._specialists:
-				self._upsert_specialist_node(spec_name, self._specialists[spec_name])
+		# Upsert registry nodes for modified strands into global graph
+		for strand_name in modified_strands:
+			if strand_name in self._strands:
+				self._upsert_strand_node(strand_name, self._strands[strand_name])
 			self._fire_event(
 				GraphEvent(
 					kind="limbo_promoted",
 					thoughts=self.graph.num_thoughts,
 					edges=self.graph.num_edges,
 					committed=0,
-					detail={"specialist": spec_name},
+					detail={"strand": strand_name},
 				)
 			)

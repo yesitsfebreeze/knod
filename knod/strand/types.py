@@ -1,4 +1,4 @@
-"""Specialist types — shared dataclasses used across handler and limbo layers.
+"""Strand types — shared dataclasses used across handler and limbo layers.
 
 Moved here from handler.py to break the upward dependency from limbo/promote.py
 into the top-level handler module.
@@ -28,8 +28,8 @@ EventListener = Callable[[GraphEvent], None]
 
 
 @dataclass
-class SpecialistIndexEntry:
-	"""Lightweight metadata for one specialist, built on startup."""
+class StrandIndexEntry:
+	"""Lightweight metadata for one strand, built on startup."""
 
 	name: str
 	purpose: str
@@ -39,8 +39,8 @@ class SpecialistIndexEntry:
 	num_edges: int
 
 
-class Specialist:
-	"""One specialist = graph + model + strand."""
+class Strand:
+	"""One strand = graph + model + strand layer."""
 
 	__slots__ = ("name", "purpose", "graph", "model", "strand")
 

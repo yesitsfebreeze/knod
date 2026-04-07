@@ -111,51 +111,6 @@ status:
 status:
 	@pgrep -f "knod ingest" > /dev/null && echo "knod running (pid $(pgrep -f 'knod ingest'))" || echo "knod not running"
 
-# Run integration test (builds first, requires OpenAI API key in config)
-[windows]
-integration: build
-	python test.py
-
-[linux]
-integration: build
-	python3 test.py
-
-# Run integration test without wiping graph data
-[windows]
-integration-keep: build
-	python test.py --keep
-
-[linux]
-integration-keep: build
-	python3 test.py --keep
-
-# Fetch corpus articles (idempotent, skips cached files)
-[windows]
-fetch-corpus:
-	python fetch_corpus.py
-
-[linux]
-fetch-corpus:
-	python3 fetch_corpus.py
-
-# Ingest corpus into a running knod (start knod first)
-[windows]
-ingest-corpus:
-	python ingest_corpus.py
-
-[linux]
-ingest-corpus:
-	python3 ingest_corpus.py
-
-# Test retrieval against a running knod with data
-[windows]
-test-retrieval:
-	python test_retrieval.py
-
-[linux]
-test-retrieval:
-	python3 test_retrieval.py
-
 # Serve the app/ directory on APP_PORT (default 3000)
 [windows]
 serve:
@@ -183,13 +138,31 @@ dev: ingest serve
 dev: ingest serve
 	@echo "knod: http://localhost:8080  |  app: http://localhost:{{APP_PORT}}/explore.html"
 
+# Run Python unit tests (pytest)
+[windows]
+pytest:
+	python -m pytest tests/test_expand.py -v
+
+[linux]
+pytest:
+	python3 -m pytest tests/test_expand.py -v
+
+# Run full integration test (requires OpenAI API key)
+[windows]
+integration:
+	python tests/integration.py
+
+[linux]
+integration:
+	python3 tests/integration.py
+
 # Format all Python files with ruff (tabs, width 2)
 fmt:
-	ruff format py_knod
+	ruff format knod tests
 
 # Check formatting without changing files
 fmt-check:
-	ruff format --check py_knod
+	ruff format --check knod tests
 
 # Clean build artifacts
 [windows]

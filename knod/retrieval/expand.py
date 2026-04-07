@@ -48,7 +48,7 @@ import time as _time
 import numpy as np
 
 from ..config import Config
-from ..specialist.graph import Edge, Graph, Thought
+from ..strand.graph import Edge, Graph, Thought
 from ..util.math import cosine
 
 
@@ -93,7 +93,7 @@ def expand(
 	Args:
 	    seeds:      Scored seed thoughts from merge(), each (Thought, score).
 	    query_emb:  Query embedding (raw, not normalised).
-	    graph:      The specialist graph to traverse.
+	graph:      The strand graph to traverse.
 	    cfg:        Config carrying traversal_depth and traversal_fan_out.
 	    targets:    Optional set of thought IDs to treat as high-value endpoints.
 	                Paths reaching a target get an is_target_path=True marker and

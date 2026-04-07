@@ -22,7 +22,7 @@ class Registry:
 
 	def _read_metadata(self, path: str) -> dict | None:
 		try:
-			from .specialist.store import read_knod_metadata
+			from .strand.store import read_knod_metadata
 
 			meta = read_knod_metadata(path)
 			return meta
