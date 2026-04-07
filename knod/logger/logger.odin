@@ -39,6 +39,15 @@ channel_tags := [CHANNEL_COUNT]string{"knod", "perf", "err "}
 @(private)
 mu: sync.Mutex
 
+// When true, console output goes to stderr instead of stdout.
+// Set this in subprocess/pipe modes so stdout stays clean for machine-readable output.
+use_stderr: bool
+
+// redirect_to_stderr configures the logger to emit console lines to stderr.
+redirect_to_stderr :: proc() {
+	use_stderr = true
+}
+
 init :: proc() {
 	exe_dir := filepath.dir(os.args[0])
 	log_dir := filepath.join({exe_dir, "logs"})
@@ -109,7 +118,8 @@ logf :: proc(ch: Channel, level: Level, format: string, args: ..any) {
 	sync.lock(&mu)
 	defer sync.unlock(&mu)
 
-	os.write(os.stdout, transmute([]u8)line_stdout)
+	out := os.stdout if !use_stderr else os.stderr
+	os.write(out, transmute([]u8)line_stdout)
 
 	if channel_open[ch_idx] {
 		os.write(channel_files[ch_idx], transmute([]u8)line_file)

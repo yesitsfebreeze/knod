@@ -18,12 +18,15 @@ Config :: struct {
 	similarity_threshold: f32,
 
 	max_context_edges:    int,
+
+	confidence_threshold: f32,
 }
 
 DEFAULT_CONFIG :: Config{
 	top_k                = 10,
 	similarity_threshold = 0.0,
 	max_context_edges    = 3,
+	confidence_threshold = 0.0,
 }
 
 SIMILARITY_FLOOR :: f32(0.2)

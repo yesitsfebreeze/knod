@@ -9,9 +9,10 @@ LOG_VERSION :: i32(2)
 KNOD_MAGIC :: i32(0x6b6e6f64)
 KNOD_VERSION :: i32(1)
 
-SECTION_GRAPH :: u8(1)
-SECTION_STRAND :: u8(2)
-SECTION_LIMBO :: u8(3)
+SECTION_GRAPH    :: u8(1)
+SECTION_STRAND   :: u8(2)
+SECTION_LIMBO    :: u8(3)
+SECTION_REGISTRY :: u8(4)
 
 RecordType :: enum u8 {
 	THOUGHT       = 1,
@@ -71,17 +72,18 @@ EdgeFindResult :: struct {
 
 
 Graph :: struct {
-	thoughts:          map[u64]Thought,
-	edges:             [dynamic]Edge,
-	limbo:             [dynamic]LimboThought,
-	outgoing:          map[u64][dynamic]int,
-	incoming:          map[u64][dynamic]int,
-	next_id:           u64,
-	purpose:           string,
-	profile:           Embedding,
-	profile_count:     u64,
-	descriptors:       map[string]Descriptor,
-	max_thoughts:      int,
-	max_edges:         int,
+	thoughts:           map[u64]Thought,
+	edges:              [dynamic]Edge,
+	limbo:              [dynamic]LimboThought,
+	outgoing:           map[u64][dynamic]int,
+	incoming:           map[u64][dynamic]int,
+	next_id:            u64,
+	purpose:            string,
+	profile:            Embedding,
+	profile_count:      u64,
+	descriptors:        map[string]Descriptor,
+	max_thoughts:       int,
+	max_edges:          int,
 	maturity_threshold: int,
+	registry_nodes:     map[string]u64,
 }

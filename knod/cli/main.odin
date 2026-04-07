@@ -32,6 +32,22 @@ main :: proc() {
 		cfg = cfg_pkg.DEFAULT
 	}
 
+	// Internal subprocess mode: spawned by the parent for multi-store queries.
+	// Must be checked before normal command routing.
+	for arg in args[1:] {
+		if arg == "--internal-query" {
+			// Strip --internal-query from the remaining args.
+			rest := make([dynamic]string)
+			for a in args[1:] {
+				if a != "--internal-query" {
+					append(&rest, a)
+				}
+			}
+			do_internal_query(&cfg, rest[:])
+			os.exit(0)
+		}
+	}
+
 	cmd_start := 1
 	if args[1] == "-v" || args[1] == "--verbose" {
 		cmd_start = 2
@@ -141,7 +157,7 @@ load_handler :: proc(cfg: ^cfg_pkg.Config) -> (h: proto.Handler, ok: bool) {
 	}
 
 	if os.exists(cfg.graph_path) {
-		_, load_ok := graph_pkg.load(g, cfg.graph_path)
+		_, load_ok := graph_pkg.load_and_replay(g, cfg.graph_path)
 		if !load_ok {
 			log.warn("failed to load graph from %s", cfg.graph_path)
 		} else {
@@ -170,12 +186,16 @@ load_handler :: proc(cfg: ^cfg_pkg.Config) -> (h: proto.Handler, ok: bool) {
 			max_similar     = cfg.max_similar,
 			edge_threshold  = cfg.edge_threshold,
 			min_link_weight = cfg.min_link_weight,
+			dedup_threshold = cfg.dedup_threshold,
 		},
 		query_cfg = query_pkg.Config{
 			top_k                = cfg.find_k,
 			similarity_threshold = cfg.similarity_threshold,
 			max_context_edges    = cfg.max_context_edges,
+			confidence_threshold = cfg.confidence_threshold,
 		},
+		query_routing_threshold = cfg.query_routing_threshold,
+		edge_decay              = cfg.edge_decay,
 	}
 	return h, true
 }
@@ -341,32 +361,40 @@ do_ingest :: proc(cfg: ^cfg_pkg.Config, args: []string) {
 do_ask :: proc(cfg: ^cfg_pkg.Config, args: []string) {
 	remaining := args
 
+	// --graph overrides to single-store mode (bypass registry entirely).
 	if graph_val, ok, r := parse_flag(remaining, "--graph"); ok {
 		cfg.graph_path = graph_val
 		remaining = r
+
+		if len(remaining) == 0 {
+			fmt.fprintln(os.stderr, "usage: knod ask [--graph <path>] <query>")
+			os.exit(1)
+		}
+
+		query_text := strings.join(remaining, " ")
+		defer delete(query_text)
+
+		h, ok2 := load_handler(cfg)
+		if !ok2 {os.exit(1)}
+		defer release_handler(&h)
+
+		answer, answer_ok := proto.handle_ask(&h, query_text)
+		if !answer_ok {
+			fmt.fprintln(os.stderr, "no answer generated")
+			os.exit(1)
+		}
+		defer delete(answer)
+
+		fmt.println()
+		fmt.println(answer)
+		return
 	}
 
-	if len(remaining) == 0 {
-		fmt.fprintln(os.stderr, "usage: knod ask [--graph <path>] <query>")
-		os.exit(1)
-	}
-
-	query_text := strings.join(remaining, " ")
-	defer delete(query_text)
-
-	h, ok := load_handler(cfg)
-	if !ok {os.exit(1)}
-	defer release_handler(&h)
-
-	answer, answer_ok := proto.handle_ask(&h, query_text)
-	if !answer_ok {
-		fmt.fprintln(os.stderr, "no answer generated")
-		os.exit(1)
-	}
-	defer delete(answer)
-
-	fmt.println()
-	fmt.println(answer)
+	// Default: multi-store mode. do_multi_ask handles registry lookup,
+	// profile routing, subprocess fan-out, and answer aggregation.
+	// If no stores are registered it will auto-add cfg.graph_path as a
+	// fallback so a single-graph setup still works.
+	do_multi_ask(cfg, remaining)
 }
 
 
@@ -387,7 +415,7 @@ do_explore :: proc(cfg: ^cfg_pkg.Config, args: []string) {
 	graph_pkg.create(&g)
 	defer graph_pkg.release(&g)
 
-	_, load_ok := graph_pkg.load(&g, cfg.graph_path)
+	_, load_ok := graph_pkg.load_and_replay(&g, cfg.graph_path)
 	if !load_ok {
 		fmt.fprintf(os.stderr, "error: failed to load graph from %s\n", cfg.graph_path)
 		os.exit(1)
@@ -600,7 +628,7 @@ do_register :: proc(cfg: ^cfg_pkg.Config, args: []string) {
 	graph_pkg.create(&g)
 	defer graph_pkg.release(&g)
 
-	_, load_ok := graph_pkg.load(&g, path)
+	_, load_ok := graph_pkg.load_and_replay(&g, path)
 	if !load_ok {
 		fmt.fprintf(os.stderr, "invalid graph file: %s\n", path)
 		os.exit(1)

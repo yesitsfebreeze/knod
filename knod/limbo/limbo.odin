@@ -2,12 +2,13 @@ package limbo
 
 
 import "core:fmt"
-import "core:os"
 import "core:path/filepath"
 import "core:strings"
 import "core:time"
 
+import gnn_pkg "../gnn"
 import graph_pkg "../graph"
+import ingest_pkg "../ingest"
 import log "../logger"
 import provider_pkg "../provider"
 import registry_pkg "../registry"
@@ -23,7 +24,7 @@ Config :: struct {
 DEFAULT_CONFIG :: Config {
 	cluster_min                = 3,
 	cluster_threshold          = 0.75,
-	specialist_match_threshold = 0.7,
+	specialist_match_threshold = 0.8,
 }
 
 
@@ -39,6 +40,7 @@ scan :: proc(
 	p: ^provider_pkg.Provider,
 	specialists: []Specialist_Profile,
 	cfg: Config = DEFAULT_CONFIG,
+	ingest_cfg: ingest_pkg.Config = ingest_pkg.DEFAULT_CONFIG,
 	on_spawn: proc(name, path, purpose: string) = nil,
 ) -> int {
 	if p == nil || p.suggest_store == nil {return 0}
@@ -55,7 +57,7 @@ scan :: proc(
 	total_promoted := 0
 
 	for &cluster in clusters {
-		n := promote_cluster(limbo_g, limbo_path, cluster[:], specialists, p, cfg, on_spawn)
+		n := promote_cluster(limbo_g, limbo_path, cluster[:], specialists, p, cfg, ingest_cfg, on_spawn)
 		total_promoted += n
 	}
 
@@ -131,6 +133,7 @@ promote_cluster :: proc(
 	specialists: []Specialist_Profile,
 	p: ^provider_pkg.Provider,
 	cfg: Config,
+	ingest_cfg: ingest_pkg.Config,
 	on_spawn: proc(name, path, purpose: string),
 ) -> int {
 
@@ -185,7 +188,7 @@ promote_cluster :: proc(
 	}
 
 
-	return _spawn_specialist(limbo_g, limbo_path, indices, store_name, purpose, p, on_spawn)
+	return _spawn_specialist(limbo_g, limbo_path, indices, store_name, purpose, p, ingest_cfg, on_spawn)
 }
 
 @(private = "file")
@@ -196,6 +199,7 @@ _spawn_specialist :: proc(
 	name: string,
 	purpose: string,
 	p: ^provider_pkg.Provider,
+	ingest_cfg: ingest_pkg.Config,
 	on_spawn: proc(name, path, purpose: string),
 ) -> int {
 	safe_name := _safe_store_name(name)
@@ -222,9 +226,98 @@ _spawn_specialist :: proc(
 		graph_pkg.add_thought(&new_g, lt.text, src, lt.embedding, now)
 	}
 
-	if !graph_pkg.save(&new_g, graph_path) {
-		log.err("[limbo] failed to save new specialist at %s", graph_path)
-		return 0
+	// Bootstrap: build a Prepared_Article from the limbo thoughts (already embedded)
+	// and run the link phase to create edges, then GNN training.
+	if graph_pkg.thought_count(&new_g) >= 2 {
+		pa: ingest_pkg.Prepared_Article
+		pa.thoughts = make([dynamic]ingest_pkg.Prepared_Thought, 0, len(indices))
+		pa.source = "limbo-bootstrap"
+
+		for slot in indices {
+			lt := &limbo_g.limbo[slot]
+			append(&pa.thoughts, ingest_pkg.Prepared_Thought{
+				text      = lt.text,
+				embedding = lt.embedding,
+			})
+		}
+
+		ingest_pkg.snapshot(&new_g, &pa, ingest_cfg)
+		ingest_pkg.link(p, &pa, ingest_cfg)
+
+		// Commit only edges (thoughts already added above).
+		for &pt in pa.thoughts {
+			if !pt.links_ok || pt.edge_embeddings == nil {continue}
+			// Find the thought id matching this text.
+			tid_match: u64 = 0
+			for tid, &t in new_g.thoughts {
+				if t.text == pt.text {
+					tid_match = tid
+					break
+				}
+			}
+			if tid_match == 0 {continue}
+			emb_idx := 0
+			for &lnk in pt.links {
+				if lnk.index < 0 || lnk.index >= len(pt.candidate_ids) {continue}
+				if lnk.weight < ingest_cfg.min_link_weight {continue}
+				if emb_idx >= len(pt.edge_embeddings) {continue}
+				target_id := pt.candidate_ids[lnk.index]
+				graph_pkg.add_edge(
+					&new_g, tid_match, target_id, lnk.weight, lnk.reasoning,
+					pt.edge_embeddings[emb_idx], now,
+				)
+				emb_idx += 1
+			}
+		}
+
+		// Cleanup pa (we borrowed text/embedding pointers, don't free them).
+		for &pt in pa.thoughts {
+			delete(pt.candidate_ids)
+			for s in pt.candidate_texts {delete(s)}
+			delete(pt.candidate_texts)
+			if pt.links != nil {
+				for &lnk in pt.links {delete(lnk.reasoning)}
+				delete(pt.links)
+			}
+			if pt.edge_embeddings != nil {delete(pt.edge_embeddings)}
+		}
+		delete(pa.thoughts)
+
+		// GNN training on the new specialist graph.
+		if graph_pkg.edge_count(&new_g) > 0 {
+			model: gnn_pkg.MPNN
+			gnn_pkg.create(&model)
+			defer gnn_pkg.release(&model)
+
+			strand: gnn_pkg.StrandMPNN
+			gnn_pkg.strand_create(&strand, gnn_pkg.DEFAULT_HIDDEN_DIM)
+			defer gnn_pkg.strand_release(&strand)
+
+			n := graph_pkg.thought_count(&new_g)
+			strand_steps := gnn_pkg.adaptive_steps(n, gnn_pkg.STRAND_TRAIN_STEPS_MAX, gnn_pkg.STRAND_TRAIN_STEPS_MIN)
+			base_steps   := gnn_pkg.adaptive_steps(n, gnn_pkg.BASE_REFINE_STEPS_MAX, gnn_pkg.BASE_REFINE_STEPS_MIN)
+			gnn_pkg.train_strand(&model, &strand, &new_g, strand_steps)
+			gnn_pkg.train_base_refine(&model, &strand, &new_g, base_steps)
+
+			strand_bytes := gnn_pkg.strand_save_bytes(&strand)
+			if strand_bytes != nil {
+				graph_pkg.save_with_strand(&new_g, graph_path, strand_bytes)
+				delete(strand_bytes)
+			} else {
+				graph_pkg.save(&new_g, graph_path)
+			}
+			log.info("[limbo] bootstrap: %d edges, GNN trained for '%s'", graph_pkg.edge_count(&new_g), safe_name)
+		} else {
+			if !graph_pkg.save(&new_g, graph_path) {
+				log.err("[limbo] failed to save new specialist at %s", graph_path)
+				return 0
+			}
+		}
+	} else {
+		if !graph_pkg.save(&new_g, graph_path) {
+			log.err("[limbo] failed to save new specialist at %s", graph_path)
+			return 0
+		}
 	}
 
 

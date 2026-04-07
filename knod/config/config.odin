@@ -31,6 +31,8 @@ Config :: struct {
 	max_tags:             int,
 	limbo_cluster_min:    int,
 	dedup_threshold:      f32,
+	query_routing_threshold: f32,
+	confidence_threshold: f32,
 }
 
 DEFAULT :: Config {
@@ -56,6 +58,8 @@ DEFAULT :: Config {
 	max_tags             = 128,
 	limbo_cluster_min    = 3,
 	dedup_threshold      = 0.95,
+	query_routing_threshold = 0.3,
+	confidence_threshold = 0.85,
 }
 
 release :: proc(cfg: ^Config) {
@@ -214,6 +218,14 @@ parse :: proc(content: string) -> (cfg: Config, ok: bool) {
 			if v, parse_ok := strconv.parse_f32(val); parse_ok {
 				cfg.dedup_threshold = v
 			}
+		case "query_routing_threshold":
+			if v, parse_ok := strconv.parse_f32(val); parse_ok {
+				cfg.query_routing_threshold = v
+			}
+		case "confidence_threshold":
+			if v, parse_ok := strconv.parse_f32(val); parse_ok {
+				cfg.confidence_threshold = v
+			}
 		}
 	}
 
@@ -285,6 +297,12 @@ write_default :: proc() -> string {
 	fmt.sbprintf(&b, "# Dedup — merge near-duplicate thoughts instead of creating duplicates.\n")
 	fmt.sbprintf(&b, "# Cosine similarity threshold (0 = disabled, 0.95 = default).\n")
 	fmt.sbprintf(&b, "dedup_threshold = %f\n", DEFAULT.dedup_threshold)
+	fmt.sbprintf(&b, "\n")
+	fmt.sbprintf(&b, "# Query routing — skip specialists whose profile similarity is below this.\n")
+	fmt.sbprintf(&b, "query_routing_threshold = %f\n", DEFAULT.query_routing_threshold)
+	fmt.sbprintf(&b, "\n")
+	fmt.sbprintf(&b, "# Confidence gate — return top result directly without LLM if score >= this.\n")
+	fmt.sbprintf(&b, "confidence_threshold = %f\n", DEFAULT.confidence_threshold)
 
 	contents := strings.to_string(b)
 	if os.write_entire_file(path, transmute([]u8)contents) {

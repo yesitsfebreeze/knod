@@ -26,6 +26,7 @@ create :: proc(g: ^Graph) {
 	g.max_thoughts = 0
 	g.max_edges = 0
 	g.maturity_threshold = MATURITY_THRESHOLD
+	g.registry_nodes = make(map[string]u64)
 }
 
 release :: proc(g: ^Graph) {
@@ -58,6 +59,9 @@ release :: proc(g: ^Graph) {
 		delete(d.text)
 	}
 	delete(g.descriptors)
+
+	for k in g.registry_nodes {delete(k)}
+	delete(g.registry_nodes)
 }
 
 set_purpose :: proc(g: ^Graph, purpose: string) {
@@ -334,6 +338,42 @@ remove_descriptor :: proc(g: ^Graph, name: string) -> bool {
 	}
 	return false
 }
+
+
+// upsert_registry_node inserts or updates a meta-node for a specialist in the graph.
+// The meta-node's embedding is the specialist's profile (running mean of all its thoughts).
+// This allows the GNN to learn inter-specialist topology.
+upsert_registry_node :: proc(
+	g: ^Graph,
+	store_name: string,
+	profile: ^Embedding,
+	created_at: i64,
+) -> u64 {
+	if existing_id, ok := g.registry_nodes[store_name]; ok {
+		// Update the existing thought's embedding.
+		if t := get_thought(g, existing_id); t != nil {
+			t.embedding = profile^
+			// Incrementally update the graph's own profile.
+			n := f32(g.profile_count)
+			for i in 0 ..< EMBEDDING_DIM {
+				g.profile[i] = (g.profile[i] * n + profile[i]) / (n + 1.0)
+			}
+			g.profile_count += 1
+			return existing_id
+		}
+	}
+
+	// Insert a new meta-node.
+	src := strings.concatenate({"registry:", store_name})
+	defer delete(src)
+	tid := add_thought(g, store_name, src, profile^, created_at)
+	if tid != 0 {
+		key := strings.clone(store_name)
+		g.registry_nodes[key] = tid
+	}
+	return tid
+}
+
 
 outgoing_edges :: proc(g: ^Graph, id: u64) -> []Edge {
 	indices, ok := g.outgoing[id]

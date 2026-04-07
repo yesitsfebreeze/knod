@@ -2,6 +2,15 @@ package graph
 
 import "core:mem"
 import "core:os"
+import "core:strings"
+
+GRAPHLOG_MAGIC   :: i32(0x474c4f47) // "GLOG"
+GRAPHLOG_VERSION :: i32(1)
+
+// log_path returns the append-log path for a given graph path.
+log_path :: proc(graph_path: string) -> string {
+	return strings.concatenate({graph_path, ".graphlog"})
+}
 
 save :: proc(g: ^Graph, path: string) -> bool {
 	fd, err := os.open(path, os.O_WRONLY | os.O_CREATE | os.O_TRUNC, 0o644)
@@ -18,6 +27,11 @@ save :: proc(g: ^Graph, path: string) -> bool {
 		if !write_section_limbo(fd, g) {return false}
 	}
 
+	if len(g.registry_nodes) > 0 {
+		if !write_section_registry(fd, g) {return false}
+	}
+
+	discard_log(path)
 	return true
 }
 
@@ -54,11 +68,23 @@ load :: proc(g: ^Graph, path: string) -> (strand_offset: int, ok: bool) {
 		case SECTION_STRAND:
 			strand_off = section_start
 			off = section_start + section_len
+		case SECTION_REGISTRY:
+			load_registry_section(g, data[section_start:section_start + section_len])
+			off = section_start + section_len
 		case:
 			off = section_start + section_len
 		}
 	}
 
+	return strand_off, true
+}
+
+// After the main file is loaded, replay any outstanding log entries.
+// The caller must pass the graph path so we can derive the log path.
+load_and_replay :: proc(g: ^Graph, path: string) -> (strand_offset: int, ok: bool) {
+	strand_off, load_ok := load(g, path)
+	if !load_ok {return 0, false}
+	replay_log(g, path)
 	return strand_off, true
 }
 
@@ -74,7 +100,11 @@ save_with_strand :: proc(g: ^Graph, path: string, strand_bytes: []u8) -> bool {
 		if !write_section_limbo(fd, g) {return false}
 	}
 
+	if len(g.registry_nodes) > 0 {
+		if !write_section_registry(fd, g) {return false}
+	}
 
+	// STRAND section
 	sec := SECTION_STRAND
 	if !write_val(fd, &sec) {return false}
 	slen := i64(len(strand_bytes))
@@ -83,6 +113,7 @@ save_with_strand :: proc(g: ^Graph, path: string, strand_bytes: []u8) -> bool {
 		_, werr := os.write(fd, strand_bytes)
 		if werr != os.ERROR_NONE {return false}
 	}
+	discard_log(path)
 	return true
 }
 
@@ -115,6 +146,106 @@ load_strand_bytes :: proc(path: string) -> (strand_bytes: []u8, ok: bool) {
 	}
 
 	return nil, true
+}
+
+
+// append_log_thought appends a single thought record to the graph's append-log file.
+// The log file path is derived from graph_path by appending ".graphlog".
+// If the log file does not exist yet, the magic+version header is written first.
+append_log_thought :: proc(graph_path: string, t: ^Thought) -> bool {
+	lp := log_path(graph_path)
+	defer delete(lp)
+	fd, err := os.open(lp, os.O_WRONLY | os.O_CREATE | os.O_APPEND, 0o644)
+	if err != os.ERROR_NONE {return false}
+	defer os.close(fd)
+
+	// Write header if file is empty.
+	size, _ := os.file_size(fd)
+	if size == 0 {
+		magic := GRAPHLOG_MAGIC; if !write_val(fd, &magic) {return false}
+		ver := GRAPHLOG_VERSION; if !write_val(fd, &ver) {return false}
+	}
+
+	return stream_thought(fd, t)
+}
+
+// append_log_edge appends a single edge record to the graph's append-log file.
+append_log_edge :: proc(graph_path: string, e: ^Edge) -> bool {
+	lp := log_path(graph_path)
+	defer delete(lp)
+	fd, err := os.open(lp, os.O_WRONLY | os.O_CREATE | os.O_APPEND, 0o644)
+	if err != os.ERROR_NONE {return false}
+	defer os.close(fd)
+
+	size, _ := os.file_size(fd)
+	if size == 0 {
+		magic := GRAPHLOG_MAGIC; if !write_val(fd, &magic) {return false}
+		ver := GRAPHLOG_VERSION; if !write_val(fd, &ver) {return false}
+	}
+
+	return stream_edge(fd, e)
+}
+
+// replay_log loads the append-log file (if it exists) and replays any thoughts/edges
+// not already present in the graph.  Called automatically from load() after the main file.
+replay_log :: proc(g: ^Graph, graph_path: string) {
+	lp := log_path(graph_path)
+	defer delete(lp)
+	data, read_ok := os.read_entire_file(lp)
+	if !read_ok {return}
+	defer delete(data)
+
+	if len(data) < 8 {return}
+	off := 0
+	magic := read_i32(data, &off)
+	if magic != GRAPHLOG_MAGIC {return}
+	_ = read_i32(data, &off) // version (unused for now)
+
+	replayed := 0
+	for off < len(data) {
+		if off + 1 > len(data) {break}
+		rt := RecordType(data[off]); off += 1
+		switch rt {
+		case .THOUGHT:
+			// Peek the id to check for duplicate.
+			if off + 8 > len(data) {return}
+			id := (^u64)(raw_data(data[off:]))^
+			if id in g.thoughts {
+				// Skip: read and discard.
+				off -= 1 // back up past the RecordType byte
+				off += 1 // re-consume it
+				_ = read_u64(data, &off)       // id
+				_ = read_str(data, &off)       // text
+				_ = read_str(data, &off)       // source
+				_ = read_embedding(data, &off) // embedding
+				_ = read_i64(data, &off)       // created_at
+				_ = read_u32(data, &off)       // access_count
+				_ = read_i64(data, &off)       // last_accessed
+			} else {
+				if !read_thought(g, data, &off) {return}
+				replayed += 1
+			}
+		case .EDGE:
+			if !read_edge(g, data, &off) {return}
+			replayed += 1
+		case .LIMBO_THOUGHT:
+			_ = read_str(data, &off)
+			_ = read_str(data, &off)
+			_ = read_embedding(data, &off)
+			_ = read_i64(data, &off)
+		case:
+			return
+		}
+	}
+}
+
+// discard_log removes the append-log file.  Called after a successful full save.
+discard_log :: proc(graph_path: string) {
+	lp := log_path(graph_path)
+	defer delete(lp)
+	if os.exists(lp) {
+		os.remove(lp)
+	}
 }
 
 
@@ -179,6 +310,48 @@ write_section_limbo :: proc(fd: os.Handle, g: ^Graph) -> bool {
 	os.seek(fd, content_end, os.SEEK_SET)
 	return true
 }
+
+@(private = "file")
+write_section_registry :: proc(fd: os.Handle, g: ^Graph) -> bool {
+	sec := SECTION_REGISTRY
+	if !write_val(fd, &sec) {return false}
+
+	len_offset, _ := os.seek(fd, 0, os.SEEK_CUR)
+	zero_len: i64 = 0
+	if !write_val(fd, &zero_len) {return false}
+	content_start, _ := os.seek(fd, 0, os.SEEK_CUR)
+
+	count := u32(len(g.registry_nodes))
+	if !write_val(fd, &count) {return false}
+	for k, v in g.registry_nodes {
+		if !write_string(fd, k) {return false}
+		vid := v
+		if !write_val(fd, &vid) {return false}
+	}
+
+	content_end, _ := os.seek(fd, 0, os.SEEK_CUR)
+	section_len := content_end - content_start
+	os.seek(fd, len_offset, os.SEEK_SET)
+	if !write_val(fd, &section_len) {return false}
+	os.seek(fd, content_end, os.SEEK_SET)
+	return true
+}
+
+@(private = "file")
+load_registry_section :: proc(g: ^Graph, data: []u8) {
+	off := 0
+	count := int(read_u32(data, &off))
+	for _ in 0 ..< count {
+		name := read_str(data, &off)
+		id   := read_u64(data, &off)
+		if len(name) > 0 && id != 0 {
+			g.registry_nodes[name] = id
+		} else {
+			if len(name) > 0 {delete(name)}
+		}
+	}
+}
+
 
 @(private = "file")
 write_graph_inner :: proc(fd: os.Handle, g: ^Graph) -> bool {

@@ -13,6 +13,7 @@ import "core:fmt"
 import "core:net"
 import "core:strings"
 import "core:sync"
+import "core:time"
 
 import gnn_pkg    "../gnn"
 import graph_pkg  "../graph"
@@ -23,19 +24,21 @@ import query_pkg  "../query"
 import util       "../util"
 
 Handler :: struct {
-	g:                    ^graph_pkg.Graph,
-	p:                    ^prov.Provider,
-	model:                ^gnn_pkg.MPNN,
-	strand:               ^gnn_pkg.StrandMPNN,
-	graph_path:           string,
-	base_checkpoint_path: string,
-	ingest_cfg:           ingest_pkg.Config,
-	query_cfg:            query_pkg.Config,
-	mu:                   sync.Mutex,
-	queue:                Ingest_Queue,
-	queue_ok:             bool,
-	subs_mu:              sync.Mutex,
-	subs:                 [dynamic]net.TCP_Socket,
+	g:                       ^graph_pkg.Graph,
+	p:                       ^prov.Provider,
+	model:                   ^gnn_pkg.MPNN,
+	strand:                  ^gnn_pkg.StrandMPNN,
+	graph_path:              string,
+	base_checkpoint_path:    string,
+	ingest_cfg:              ingest_pkg.Config,
+	query_cfg:               query_pkg.Config,
+	mu:                      sync.Mutex,
+	queue:                   Ingest_Queue,
+	queue_ok:                bool,
+	subs_mu:                 sync.Mutex,
+	subs:                    [dynamic]net.TCP_Socket,
+	query_routing_threshold: f32,
+	edge_decay:              f32,
 }
 
 // handler_start_queue creates and starts the async ingest queue.
@@ -66,7 +69,7 @@ IngestResult :: struct {
 }
 
 handle_ingest :: proc(h: ^Handler, text: string, descriptor: string = "") -> IngestResult {
-	added := ingest_pkg.ingest(h.g, h.p, text, "", descriptor, h.ingest_cfg)
+	added := ingest_pkg.ingest(h.g, h.p, text, "", descriptor, h.ingest_cfg, h.graph_path)
 
 	if added > 0 {
 		log.info(
@@ -147,6 +150,19 @@ handle_ask :: proc(h: ^Handler, query_text: string) -> (answer: string, ok: bool
 		return "", false
 	}
 
+	// Confidence gate: if the top result exceeds the threshold, return its text
+	// directly without invoking the LLM.
+	if qcfg.confidence_threshold > 0.0 && scored[0].score >= qcfg.confidence_threshold {
+		b := strings.builder_make()
+		for st, i in scored {
+			if i > 0 {strings.write_string(&b, "\n\n")}
+			strings.write_string(&b, st.thought.text)
+		}
+		answer_text := strings.to_string(b)
+		log.info("[ask] confidence gate triggered (score=%.3f >= %.3f), skipping LLM", scored[0].score, qcfg.confidence_threshold)
+		return answer_text, true
+	}
+
 	result, answer_ok := query_pkg.answer(h.g, h.p, query_text, scored)
 	if !answer_ok {
 		log.warn("[ask] failed to generate answer")
@@ -160,6 +176,18 @@ handle_ask :: proc(h: ^Handler, query_text: string) -> (answer: string, ok: bool
 		len(result.sources),
 	)
 	return result.answer_text, true
+}
+
+// handle_register_specialist upserts a meta-node for a specialist store into the
+// handler's graph.  Called when a specialist is spawned by limbo or loaded externally.
+// specialist_profile is the specialist graph's running profile embedding.
+handle_register_specialist :: proc(h: ^Handler, store_name: string, specialist_profile: ^graph_pkg.Embedding) {
+	now := time.time_to_unix(time.now())
+	tid := graph_pkg.upsert_registry_node(h.g, store_name, specialist_profile, now)
+	if tid != 0 {
+		log.info("[handler] upserted meta-node %d for specialist '%s'", tid, store_name)
+		_save_graph(h)
+	}
 }
 
 handle_status :: proc(h: ^Handler) -> string {
@@ -242,6 +270,12 @@ handler_push_event :: proc(h: ^Handler) {
 @(private)
 _run_gnn_and_save :: proc(h: ^Handler, added: int) {
 	if added <= 0 || h.model == nil {return}
+
+	// Apply edge decay before training so stale edges don't bias the GNN.
+	if h.edge_decay > 0.0 {
+		now := time.time_to_unix(time.now())
+		graph_pkg.apply_edge_decay(h.g, h.edge_decay, now)
+	}
 
 	n := graph_pkg.thought_count(h.g)
 	log.info("[gnn] training (%d thoughts, %d edges)", n, graph_pkg.edge_count(h.g))
