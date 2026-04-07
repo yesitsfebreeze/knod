@@ -53,11 +53,15 @@ class Handler:
 		self._queue: Queue | None = None
 		self._queue_worker: threading.Thread | None = None
 		self._limbo_thread: threading.Thread | None = None
+		self._poll_thread: threading.Thread | None = None
 		self._shutdown = threading.Event()
 		self._in_flight = threading.Event()
 		self._listeners: dict[str, list[EventListener]] = {}
 		self._listeners_lock = threading.Lock()
 		self._retrieval_count: int = 0
+		self._last_poll_state: dict = {}
+		self._last_poll_state_lock = threading.Lock()
+		self._last_strand_state: dict[str, tuple[int, int]] = {}  # name -> (thoughts, edges)
 
 	def init(self):
 		base = Path(self.cfg.graph_path).with_suffix("")
@@ -90,6 +94,10 @@ class Handler:
 		# Start limbo background scan
 		self._limbo_thread = threading.Thread(target=self._limbo_scan_loop, daemon=True)
 		self._limbo_thread.start()
+
+		# Start store polling (every 5 seconds)
+		self._poll_thread = threading.Thread(target=self._poll_loop, daemon=True)
+		self._poll_thread.start()
 
 	def save(self):
 		base = Path(self.cfg.graph_path).with_suffix("")
@@ -296,6 +304,64 @@ class Handler:
 			f"purpose={self.graph.purpose or '(none)'}"
 		)
 
+	def get_diff(self) -> dict:
+		"""Get diff from last poll. Returns added/changed items since last call."""
+		current = {
+			"thought_count": self.graph.num_thoughts,
+			"edge_count": self.graph.num_edges,
+			"thought_ids": set(self.graph.thoughts.keys()),
+			"limbo_count": len(self.graph.limbo),
+			"queue_size": self._queue.qsize() if self._queue else 0,
+			"in_flight": 1 if self._in_flight.is_set() else 0,
+		}
+
+		with self._last_poll_state_lock:
+			if not self._last_poll_state:
+				self._last_poll_state = current.copy()
+				self._last_poll_state["thought_ids"] = current["thought_ids"].copy()
+				return {
+					"initial": True,
+					"thought_count": current["thought_count"],
+					"edge_count": current["edge_count"],
+					"limbo_count": current["limbo_count"],
+					"queue_size": current["queue_size"],
+					"in_flight": current["in_flight"],
+				}
+
+			prev = self._last_poll_state
+
+			added_thought_ids = current["thought_ids"] - prev["thought_ids"]
+
+			new_thoughts = []
+			if added_thought_ids:
+				for tid in sorted(added_thought_ids):
+					t = self.graph.thoughts.get(tid)
+					if t:
+						new_thoughts.append(
+							{
+								"id": t.id,
+								"text": t.text,
+								"source": t.source,
+								"store": "global",
+							}
+						)
+
+			diff = {
+				"initial": False,
+				"thought_count": current["thought_count"],
+				"edge_count": current["edge_count"],
+				"added_thoughts": new_thoughts,
+				"added_count": len(new_thoughts),
+				"limbo_count": current["limbo_count"],
+				"queue_size": current["queue_size"],
+				"in_flight": current["in_flight"],
+			}
+
+			self._last_poll_state = current.copy()
+			self._last_poll_state["thought_ids"] = current["thought_ids"].copy()
+
+			return diff
+
 	def set_purpose(self, purpose: str):
 		self.graph.purpose = purpose
 		self.save()
@@ -396,6 +462,7 @@ class Handler:
 					"label": t.text[:80],
 					"source": t.source,
 					"store": store,
+					"type": "thought",
 					"access_count": t.access_count,
 					"created_at": t.created_at,
 					"last_accessed": t.last_accessed,
@@ -1026,3 +1093,105 @@ class Handler:
 					detail={"strand": strand_name},
 				)
 			)
+
+	def _poll_loop(self):
+		"""Background: poll registry for new stores every 5 seconds."""
+		while not self._shutdown.is_set():
+			self._shutdown.wait(5)
+			if self._shutdown.is_set():
+				break
+			try:
+				self._poll_stores()
+			except Exception:
+				log.exception("Store poll failed")
+
+	def _poll_stores(self):
+		"""Check registry for new stores and load them."""
+		current_stores = set(self.registry.stores.keys())
+		loaded_stores = set(self._strands.keys())
+
+		# Initialize on first poll
+		if not self._last_strand_state:
+			for name in loaded_stores:
+				strand = self._strands.get(name)
+				if strand:
+					self._last_strand_state[name] = (strand.graph.num_thoughts, strand.graph.num_edges)
+			return
+
+		# Check for new stores
+		new_stores = current_stores - loaded_stores
+		loaded_before = set(self._strands.keys())
+
+		for name in new_stores:
+			entry = self.registry.stores.get(name)
+			if not entry:
+				continue
+			graph_path = entry["path"]
+			if not Path(graph_path).exists():
+				log.warning("New store '%s' graph not found: %s", name, graph_path)
+				continue
+			try:
+				base = Path(graph_path).with_suffix("")
+				graph, model, strand_layer = load_all(self.cfg, base)
+				self._strands[name] = Strand(
+					name=name,
+					purpose=entry.get("purpose", "") or graph.purpose,
+					graph=graph,
+					model=model,
+					strand=strand_layer,
+				)
+				self._index[name] = StrandIndexEntry(
+					name=name,
+					purpose=graph.purpose,
+					descriptors=dict(graph.descriptors),
+					profile=graph.profile.copy() if graph.profile is not None else None,
+					num_thoughts=graph.num_thoughts,
+					num_edges=graph.num_edges,
+				)
+				self._upsert_strand_node(name, self._strands[name])
+				log.info("Loaded new store '%s' (%d thoughts, %d edges)", name, graph.num_thoughts, graph.num_edges)
+				self._fire_event(
+					GraphEvent(
+						kind="store_added",
+						thoughts=self.graph.num_thoughts,
+						edges=self.graph.num_edges,
+						committed=0,
+						detail={"store": name},
+					)
+				)
+			except Exception:
+				log.warning("Failed to load new store '%s'", name, exc_info=True)
+
+		# Check for removed stores
+		removed_stores = loaded_stores - current_stores
+		for name in removed_stores:
+			del self._strands[name]
+			self._index.pop(name, None)
+			self.graph._registry_nodes.pop(name, None)
+			self._last_strand_state.pop(name, None)
+			log.info("Removed store '%s'", name)
+			self._fire_event(
+				GraphEvent(
+					kind="store_removed",
+					thoughts=self.graph.num_thoughts,
+					edges=self.graph.num_edges,
+					committed=0,
+					detail={"store": name},
+				)
+			)
+
+		# Track changes to existing stores
+		for name, strand in self._strands.items():
+			prev = self._last_strand_state.get(name, (0, 0))
+			curr = (strand.graph.num_thoughts, strand.graph.num_edges)
+			if curr != prev:
+				self._last_strand_state[name] = curr
+				self._fire_event(
+					GraphEvent(
+						kind="store_changed",
+						thoughts=self.graph.num_thoughts,
+						edges=self.graph.num_edges,
+						committed=curr[0] - prev[0],
+						detail={"store": name, "thoughts": curr[0], "edges": curr[1]},
+					)
+				)

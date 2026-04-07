@@ -105,6 +105,11 @@ def http(handler: Handler) -> FastAPI:
 	def health():
 		return {"status": "ok"}
 
+	@app.get("/diff")
+	def get_diff():
+		"""Poll for changes since last call. Returns new thoughts and current state."""
+		return handler.get_diff()
+
 	@app.get("/status")
 	def status():
 		return {"status": handler.status()}

@@ -173,40 +173,30 @@ def merge_routing_into_base(model, routing: dict):
 	if not routing:
 		return
 
-	node_features_list = []
-	edge_index_list = []
-	edge_features_list = []
-
-	if "strand_profiles" in routing:
-		for profile, name in routing["strand_profiles"]:
-			profile_tensor = torch.tensor(profile, dtype=torch.float)
-			node_features_list.append(profile_tensor)
-
-	if "node_hidden_avg" in routing:
+	if "strand_profiles" in routing and "node_hidden_avg" in routing:
 		avg_hidden = torch.tensor(routing["node_hidden_avg"], dtype=torch.float)
-		if node_features_list:
-			combined = torch.stack(node_features_list)
-			updated = []
-			for nf in node_features_list:
-				blended = 0.7 * nf + 0.3 * avg_hidden[: len(nf)]
-				updated.append(blended)
-			node_features_list = updated
+		hidden_dim = model.hidden_dim
+		embed_dim = model.embedding_dim
 
-	if node_features_list:
-		current_params = list(model.parameters())
-		if current_params:
-			first_layer = model.node_proj
-			with torch.no_grad():
-				for i, nf in enumerate(node_features_list[:3]):
-					if nf.shape[0] == model.embedding_dim:
-						proj = F.relu(first_layer(nf.unsqueeze(0)))
-						for layer in model.layers:
-							proj = layer(
-								proj, torch.tensor([[0]], dtype=torch.long), torch.zeros(1, model.hidden_dim, dtype=torch.float)
-							)
-						if i < len(current_params) // 4:
-							noise = torch.randn_like(current_params[i][: nf.shape[0]]) * 0.01
-							current_params[i][: nf.shape[0]] += noise
+		with torch.no_grad():
+			for profile, name in routing["strand_profiles"]:
+				profile_tensor = torch.tensor(profile, dtype=torch.float)
+				if profile_tensor.shape[0] != embed_dim:
+					continue
+
+				proj = F.relu(model.node_proj(profile_tensor.unsqueeze(0)))
+				blended = 0.7 * proj.squeeze(0) + 0.3 * avg_hidden[:hidden_dim]
+
+				for layer in model.layers:
+					blended = layer(
+						blended.unsqueeze(0),
+						torch.tensor([[0]], dtype=torch.long),
+						torch.zeros(1, hidden_dim, dtype=torch.float),
+					)
+					blended = blended.squeeze(0)
+
+				noise = torch.randn_like(blended) * 0.001
+				blended = blended + noise
 
 
 def save_base_model(model: KnodMPNN, cfg=None, routing: dict | None = None):
