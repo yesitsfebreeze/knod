@@ -3,23 +3,23 @@
 :root {
   --font-ui: "IBM Plex Mono", "JetBrains Mono", ui-monospace, monospace;
   --theme-bg: #181818;
-  --theme-bg-rgb: 24,24,24;
+  --theme-bg-rgb: 24, 24, 24;
   --theme-fg: #d8d8d8;
-  --theme-fg-rgb: 216,216,216;
+  --theme-fg-rgb: 216, 216, 216;
   --theme-cursor: #7cafc2;
-  --theme-cursor-rgb: 124,175,194;
-  --theme-surface-rgb: 43,43,43;
-  --theme-surface-strong-rgb: 58,58,58;
-  --theme-border-rgb: 90,90,90;
-  --theme-muted-rgb: 136,136,136;
-  --theme-muted-strong-rgb: 184,184,184;
-  --theme-shadow-rgb: 10,10,10;
-  --theme-grid-rgb: 74,74,74;
-  --theme-red-rgb: 171,70,66;
-  --theme-green-rgb: 161,181,108;
-  --theme-yellow-rgb: 247,202,136;
-  --theme-blue-rgb: 124,175,194;
-  --theme-magenta-rgb: 186,139,175;
+  --theme-cursor-rgb: 124, 175, 194;
+  --theme-surface-rgb: 43, 43, 43;
+  --theme-surface-strong-rgb: 58, 58, 58;
+  --theme-border-rgb: 90, 90, 90;
+  --theme-muted-rgb: 136, 136, 136;
+  --theme-muted-strong-rgb: 184, 184, 184;
+  --theme-shadow-rgb: 10, 10, 10;
+  --theme-grid-rgb: 74, 74, 74;
+  --theme-red-rgb: 171, 70, 66;
+  --theme-green-rgb: 161, 181, 108;
+  --theme-yellow-rgb: 247, 202, 136;
+  --theme-blue-rgb: 124, 175, 194;
+  --theme-magenta-rgb: 186, 139, 175;
 }
 
 * {
@@ -591,6 +591,7 @@ body.ask-open .query-hint {
 }
 
 @keyframes loadPulse {
+
   0%,
   100% {
     opacity: 0.42;
@@ -792,8 +793,15 @@ body.ask-open .query-hint {
 }
 
 @keyframes recency-slide {
-  from { opacity: 0; transform: translateY(-4px); }
-  to   { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .recency-option-swatch {
