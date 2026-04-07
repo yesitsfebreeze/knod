@@ -14,7 +14,7 @@ from .strand.graph import Graph, Thought
 from .strand.gnn import KnodMPNN, StrandLayer
 from .strand.trainer import GNNTrainer
 from .strand.types import GraphEvent, EventListener, StrandIndexEntry, Strand, IngestResult
-from .strand.store import save_all, load_all, load_base_model, read_knod_metadata
+from .strand.store import save_all, load_all, load_base_model, read_knod_metadata, save_base_model
 from .util.math import cosine
 from .ingest import Ingester
 from .limbo import find_clusters, promote_cluster
@@ -140,8 +140,11 @@ class Handler:
 			if result.committed and self.graph.num_edges > 0:
 				# Reload base model (may have been updated by strand training)
 				load_base_model(self.model)
-				loss = self.trainer.train_on_graph(self.graph)
+				loss, routing = self.trainer.train_on_graph_with_routing(self.graph)
 				log.info("GNN training loss: %.4f", loss)
+				# Merge strand routing knowledge into base for cross-strand navigation
+				if routing:
+					save_base_model(self.model, self.cfg, routing)
 			self.save()
 		self._fire_event(
 			GraphEvent(
@@ -207,9 +210,13 @@ class Handler:
 			all_chains.extend(local_chains)
 
 			for name, strand in self._strands.items():
+				# Profile-based routing: skip strands below similarity threshold
 				if strand.graph.profile is not None:
 					sim = cosine(strand.graph.profile, query_emb)
-					log.debug("Strand '%s' profile sim=%.3f", name, sim)
+					if sim < self.cfg.query_routing_threshold:
+						log.debug("Strand '%s' profile sim=%.3f < %.3f, skipping", name, sim, self.cfg.query_routing_threshold)
+						continue
+					log.debug("Strand '%s' profile sim=%.3f >= %.3f, including", name, sim, self.cfg.query_routing_threshold)
 				try:
 					strand_scored, strand_chains = self._score_strand(query_emb, strand.graph, strand.model, strand.strand)
 					all_scored.append(strand_scored)

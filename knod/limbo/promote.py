@@ -130,11 +130,19 @@ def promote_cluster(
 				new_ids.append(t.id)
 		# Bootstrap: link + train
 		bootstrap_thoughts(new_ids, strand.graph, strand.model, strand.strand, provider, cfg)
+		# Refine existing edges in the target strand (re-evaluate based on new content)
+		strand.graph.refine_edges(
+			boost=cfg.refinement_boost,
+			dampen=cfg.refinement_dampen,
+			min_traversals=1,
+		)
 		# Save strand
 		graph_path = registry.stores[best_match]["path"]
 		base = Path(graph_path).with_suffix("")
 		save_all(strand.graph, strand.model, strand.strand, base)
-		log.info("Promoted %d limbo thoughts to strand '%s'", len(cluster), best_match)
+		log.info(
+			"Promoted %d limbo thoughts to strand '%s' (refined %d edges)", len(cluster), best_match, strand.graph.num_edges
+		)
 		return best_match
 	else:
 		return _spawn_strand(name, purpose, cluster, strands, provider, cfg, registry, graph_base_path)

@@ -91,10 +91,17 @@ class GNNTrainer:
 		return loss.item()
 
 	def train_on_graph(self, graph) -> float:
-		"""Run adaptive training steps on the full graph."""
+		"""Run adaptive training steps on the full graph.
+
+		Returns average loss. Stores routing knowledge in self.last_routing
+		for the caller to extract and merge into the base model.
+		"""
 		from .graph import Graph
+		from .store import extract_routing_from_strand
 
 		assert isinstance(graph, Graph)
+
+		self.last_routing = None
 
 		if graph.num_thoughts < 2 or graph.num_edges == 0:
 			return 0.0
@@ -109,4 +116,14 @@ class GNNTrainer:
 		for _ in range(steps):
 			total_loss += self.train_step(node_features, edge_index, edge_features, graph.num_thoughts)
 
+		self.last_routing = extract_routing_from_strand(graph, self.model, self.strand)
+
 		return total_loss / steps
+
+	def train_on_graph_with_routing(self, graph) -> tuple[float, dict]:
+		"""Run training and return (loss, routing_dict).
+
+		Convenience wrapper for callers that need both loss and routing.
+		"""
+		loss = self.train_on_graph(graph)
+		return loss, self.last_routing or {}

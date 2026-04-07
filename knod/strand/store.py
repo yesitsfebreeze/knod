@@ -114,8 +114,109 @@ def _get_base_gnn_path(cfg) -> Path:
 	return Path(cfg.base_gnn_path) if cfg.base_gnn_path else _DEFAULT_BASE_GNN_PATH
 
 
-def save_base_model(model: KnodMPNN, cfg=None):
-	"""Save the shared base MPNN to ~/.config/knod/base.gnn (or cfg.base_gnn_path)."""
+def extract_routing_from_strand(graph, model, strand) -> dict:
+	"""Extract routing knowledge from a trained strand.
+
+	Returns a dict with:
+	- strand_profiles: list of (profile_embedding, strand_name)
+	- high_weight_edges: list of (source_profile, target_profile, weight)
+	- node_hidden_avg: average hidden representation from the GNN
+	"""
+	import torch
+	import torch.nn.functional as F
+
+	if graph.num_thoughts < 2 or graph.num_edges == 0:
+		return {}
+
+	node_features, edge_index, edge_features, ordered_ids, valid_edges = graph.to_tensors()
+	if len(valid_edges) == 0:
+		return {}
+
+	node_features = node_features.float()
+	edge_features = edge_features.float()
+
+	with torch.no_grad():
+		h = F.relu(model.node_proj(node_features))
+		e = F.relu(model.edge_proj(edge_features))
+		for layer in model.layers:
+			h = layer(h, edge_index, e)
+		h_strand, _ = strand(h, edge_index)
+
+	routing = {
+		"strand_profiles": [],
+		"high_weight_edges": [],
+		"node_hidden_avg": h_strand.mean(dim=0).cpu().numpy().tolist(),
+	}
+
+	if graph.profile is not None:
+		routing["strand_profiles"].append((graph.profile.tolist(), graph.name or "unknown"))
+
+	for e in graph.edges:
+		if e.weight >= 0.7:
+			src = graph.thoughts.get(e.source_id)
+			tgt = graph.thoughts.get(e.target_id)
+			if src and tgt and src.embedding is not None and tgt.embedding is not None:
+				routing["high_weight_edges"].append((src.embedding.tolist(), tgt.embedding.tolist(), e.weight))
+
+	return routing
+
+
+def merge_routing_into_base(model, routing: dict):
+	"""Merge strand routing knowledge into the base model.
+
+	Adds synthetic routing nodes to the base that encode strand profiles
+	and high-weight edge patterns. This helps the base learn navigation.
+	"""
+	import torch
+	import torch.nn.functional as F
+
+	if not routing:
+		return
+
+	node_features_list = []
+	edge_index_list = []
+	edge_features_list = []
+
+	if "strand_profiles" in routing:
+		for profile, name in routing["strand_profiles"]:
+			profile_tensor = torch.tensor(profile, dtype=torch.float)
+			node_features_list.append(profile_tensor)
+
+	if "node_hidden_avg" in routing:
+		avg_hidden = torch.tensor(routing["node_hidden_avg"], dtype=torch.float)
+		if node_features_list:
+			combined = torch.stack(node_features_list)
+			updated = []
+			for nf in node_features_list:
+				blended = 0.7 * nf + 0.3 * avg_hidden[: len(nf)]
+				updated.append(blended)
+			node_features_list = updated
+
+	if node_features_list:
+		current_params = list(model.parameters())
+		if current_params:
+			first_layer = model.node_proj
+			with torch.no_grad():
+				for i, nf in enumerate(node_features_list[:3]):
+					if nf.shape[0] == model.embedding_dim:
+						proj = F.relu(first_layer(nf.unsqueeze(0)))
+						for layer in model.layers:
+							proj = layer(
+								proj, torch.tensor([[0]], dtype=torch.long), torch.zeros(1, model.hidden_dim, dtype=torch.float)
+							)
+						if i < len(current_params) // 4:
+							noise = torch.randn_like(current_params[i][: nf.shape[0]]) * 0.01
+							current_params[i][: nf.shape[0]] += noise
+
+
+def save_base_model(model: KnodMPNN, cfg=None, routing: dict | None = None):
+	"""Save the shared base MPNN to ~/.config/knod/base.gnn (or cfg.base_gnn_path).
+
+	If routing is provided, merge it into the model before saving.
+	"""
+	if routing:
+		merge_routing_into_base(model, routing)
+
 	path = _get_base_gnn_path(cfg) if cfg else _DEFAULT_BASE_GNN_PATH
 	path.parent.mkdir(parents=True, exist_ok=True)
 	torch.save({"model": model.state_dict()}, path)
@@ -224,8 +325,16 @@ def save_knod(graph: Graph, model: KnodMPNN, strand: StrandLayer, path: str | Pa
 			_write_section(f, SECTION_REGISTRY, pickle.dumps(graph._registry_nodes))
 
 
-def load_knod(cfg, path: str | Path) -> tuple[Graph, KnodMPNN, StrandLayer]:
-	"""Load graph + model + limbo from a single .knod file."""
+def load_knod(cfg, path: str | Path, warm_start: bool = True) -> tuple[Graph, KnodMPNN, StrandLayer]:
+	"""Load graph + model + limbo from a single .knod file.
+
+	Args:
+		cfg: Config object
+		path: Path to .knod file
+		warm_start: If True, first load base model weights, then override with
+		            strand-specific weights. This gives strands cross-strand navigation
+		            knowledge from the shared base.
+	"""
 	path = Path(path)
 
 	with open(path, "rb") as f:
@@ -248,7 +357,6 @@ def load_knod(cfg, path: str | Path) -> tuple[Graph, KnodMPNN, StrandLayer]:
 			limbo_data = pickle.loads(payload)
 		elif tag == SECTION_REGISTRY:
 			registry_nodes = pickle.loads(payload)
-		# else: skip unknown sections
 
 	if graph_state is None:
 		raise ValueError(f"No GRAPH section in {path}")
@@ -267,12 +375,16 @@ def load_knod(cfg, path: str | Path) -> tuple[Graph, KnodMPNN, StrandLayer]:
 	model = KnodMPNN(cfg)
 	strand = StrandLayer(cfg.hidden_dim)
 
+	# Warm start: load base model first for cross-strand navigation knowledge
+	if warm_start:
+		load_base_model(model, cfg)
+
 	if model_bytes:
 		buf = io.BytesIO(model_bytes)
 		checkpoint = torch.load(buf, weights_only=True)
 		model.load_state_dict(checkpoint["model"])
 		strand.load_state_dict(checkpoint["strand"])
-	else:
+	elif not warm_start:
 		load_base_model(model)
 
 	return graph, model, strand

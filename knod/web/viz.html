@@ -14,12 +14,24 @@
 <body>
   <div id="loading">loading graph…</div>
   <canvas id="canvas"></canvas>
+  <div id="query-hint-bottom" class="query-hint query-hint-bottom">Press space to query</div>
   <div id="panel" class="glass">
     <h1>knod graph</h1>
     <div class="stat">thoughts: <b id="s-nodes">—</b></div>
     <div class="stat">edges: <b id="s-edges">—</b></div>
+    <div class="stat">dimensions: <b id="s-dimensions">—</b></div>
     <input id="search" type="text" placeholder="search thoughts…" autocomplete="off">
     <div id="search-results"></div>
+    <hr class="divider">
+    <div class="controls-head">
+      <div>
+        <div class="controls-title">dimension balance</div>
+        <div class="controls-copy">Top graph tags ranked by popularity. Raising one rebalances the others.</div>
+      </div>
+      <button id="dimension-reset" class="ghost-button" type="button">reset</button>
+    </div>
+    <div id="dimension-summary" class="controls-summary">balanced</div>
+    <div id="dimension-controls" class="controls open"></div>
 
   </div>
   <div id="detail" class="glass">
@@ -30,6 +42,25 @@
       <h3>connections</h3>
       <div id="d-edge-list"></div>
     </div>
+  </div>
+  <div id="ask-overlay" class="ask-overlay" aria-hidden="true" hidden>
+    <section id="ask-dialog" class="ask-dialog" role="dialog" aria-modal="true" aria-label="Ask knod">
+      <div id="ask-stack" class="ask-stack">
+        <div id="ask-answer" class="ask-answer" hidden>
+          <div class="ask-answer-label">best shot</div>
+          <div id="ask-answer-text" class="ask-answer-text"></div>
+          <div id="ask-sources-list" class="ask-sources-list"></div>
+        </div>
+        <div id="ask-thoughts" class="ask-thoughts" hidden>
+          <div class="ask-thoughts-label">matching thoughts</div>
+          <div id="ask-thoughts-list" class="ask-thoughts-list"></div>
+        </div>
+      </div>
+      <form id="ask-form" class="glass ask-form">
+        <input id="ask-input" type="text" placeholder="Ask the graph anything..." autocomplete="off">
+        <div id="ask-status" class="ask-status">Type to search thoughts and query the model. Esc closes.</div>
+      </form>
+    </section>
   </div>
 
   <script type="module" src="/static/viz.js"></script>
