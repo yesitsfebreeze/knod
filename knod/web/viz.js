@@ -200,87 +200,87 @@ function syncOrbitTarget(snap = false) {
   const pos = selected?.pos || graphCenter;
   setOrbitTarget(pos, snap);
 }
-function rotateIntoCamera(point, center, yawAngle=yaw, pitchAngle=pitch) {
-  const px=point[0]-center[0], py=point[1]-center[1], pz=point[2]-center[2];
+function rotateIntoCamera(point, center, yawAngle = yaw, pitchAngle = pitch) {
+  const px = point[0] - center[0], py = point[1] - center[1], pz = point[2] - center[2];
 
-  const cy=Math.cos(-yawAngle), sy=Math.sin(-yawAngle);
-  const yawX=px*cy + pz*sy;
-  const yawY=py;
-  const yawZ=-px*sy + pz*cy;
+  const cy = Math.cos(-yawAngle), sy = Math.sin(-yawAngle);
+  const yawX = px * cy + pz * sy;
+  const yawY = py;
+  const yawZ = -px * sy + pz * cy;
 
-  const cx=Math.cos(-pitchAngle), sx=Math.sin(-pitchAngle);
+  const cx = Math.cos(-pitchAngle), sx = Math.sin(-pitchAngle);
   return [
     yawX,
-    yawY*cx - yawZ*sx,
-    yawY*sx + yawZ*cx,
+    yawY * cx - yawZ * sx,
+    yawY * sx + yawZ * cx,
   ];
 }
 function getNodeExtent(n) {
-  return Math.max(n.r*2.0*(n.sizeMul||0.1), n.kind==="tag" ? 0.10 : 0.04) * FRAME_PAD;
+  return Math.max(n.r * 2.0 * (n.sizeMul || 0.1), n.kind === "tag" ? 0.10 : 0.04) * FRAME_PAD;
 }
-function getProjectedBounds(center, distance, yawAngle=yaw, pitchAngle=pitch) {
-  const aspect=Math.max(W/Math.max(H, 1), 0.1);
-  const tanHalf=Math.tan(FOV/2);
-  const margin=Math.min(FRAME_MARGIN_PX, Math.min(W, H)*0.18);
-  const bounds={minX:Infinity, minY:Infinity, maxX:-Infinity, maxY:-Infinity, maxExtent:0.6, visible:true, margin};
+function getProjectedBounds(center, distance, yawAngle = yaw, pitchAngle = pitch) {
+  const aspect = Math.max(W / Math.max(H, 1), 0.1);
+  const tanHalf = Math.tan(FOV / 2);
+  const margin = Math.min(FRAME_MARGIN_PX, Math.min(W, H) * 0.18);
+  const bounds = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity, maxExtent: 0.6, visible: true, margin };
 
   for (const n of allNodes) {
-    const rr=getNodeExtent(n);
-    const [rx, ry, rz]=rotateIntoCamera(n.pos, center, yawAngle, pitchAngle);
-    const w=distance-rz;
+    const rr = getNodeExtent(n);
+    const [rx, ry, rz] = rotateIntoCamera(n.pos, center, yawAngle, pitchAngle);
+    const w = distance - rz;
     if (w <= 0.001) {
-      bounds.visible=false;
+      bounds.visible = false;
       return bounds;
     }
-    const ndcX=rx/(w*tanHalf*aspect);
-    const ndcY=ry/(w*tanHalf);
-    const sx=(ndcX*0.5+0.5)*W;
-    const sy=(1-(ndcY*0.5+0.5))*H;
-    const radiusPx=Math.max((rr/(w*tanHalf*aspect))*W*0.5, (rr/(w*tanHalf))*H*0.5);
+    const ndcX = rx / (w * tanHalf * aspect);
+    const ndcY = ry / (w * tanHalf);
+    const sx = (ndcX * 0.5 + 0.5) * W;
+    const sy = (1 - (ndcY * 0.5 + 0.5)) * H;
+    const radiusPx = Math.max((rr / (w * tanHalf * aspect)) * W * 0.5, (rr / (w * tanHalf)) * H * 0.5);
 
-    bounds.minX=Math.min(bounds.minX, sx-radiusPx);
-    bounds.maxX=Math.max(bounds.maxX, sx+radiusPx);
-    bounds.minY=Math.min(bounds.minY, sy-radiusPx);
-    bounds.maxY=Math.max(bounds.maxY, sy+radiusPx);
-    bounds.maxExtent=Math.max(bounds.maxExtent, Math.abs(rx)+rr, Math.abs(ry)+rr, Math.abs(rz)+rr);
+    bounds.minX = Math.min(bounds.minX, sx - radiusPx);
+    bounds.maxX = Math.max(bounds.maxX, sx + radiusPx);
+    bounds.minY = Math.min(bounds.minY, sy - radiusPx);
+    bounds.maxY = Math.max(bounds.maxY, sy + radiusPx);
+    bounds.maxExtent = Math.max(bounds.maxExtent, Math.abs(rx) + rr, Math.abs(ry) + rr, Math.abs(rz) + rr);
   }
 
   return bounds;
 }
-function fitsViewport(center, distance, yawAngle=yaw, pitchAngle=pitch) {
-  const bounds=getProjectedBounds(center, distance, yawAngle, pitchAngle);
-  if (!bounds.visible) return {fits:false, bounds};
-  const fits=
+function fitsViewport(center, distance, yawAngle = yaw, pitchAngle = pitch) {
+  const bounds = getProjectedBounds(center, distance, yawAngle, pitchAngle);
+  if (!bounds.visible) return { fits: false, bounds };
+  const fits =
     bounds.minX >= bounds.margin &&
-    bounds.maxX <= W-bounds.margin &&
+    bounds.maxX <= W - bounds.margin &&
     bounds.minY >= bounds.margin &&
-    bounds.maxY <= H-bounds.margin;
-  return {fits, bounds};
+    bounds.maxY <= H - bounds.margin;
+  return { fits, bounds };
 }
-function fitDistanceForBounds(center, yawAngle=yaw, pitchAngle=pitch) {
+function fitDistanceForBounds(center, yawAngle = yaw, pitchAngle = pitch) {
   if (!allNodes.length) return 0.8;
 
-  let low=0.05;
-  let high=1.0;
-  let probe=fitsViewport(center, high, yawAngle, pitchAngle);
-  let expandCount=0;
+  let low = 0.05;
+  let high = 1.0;
+  let probe = fitsViewport(center, high, yawAngle, pitchAngle);
+  let expandCount = 0;
   while (!probe.fits && expandCount < 24) {
-    low=high;
-    high*=1.6;
-    probe=fitsViewport(center, high, yawAngle, pitchAngle);
-    expandCount+=1;
+    low = high;
+    high *= 1.6;
+    probe = fitsViewport(center, high, yawAngle, pitchAngle);
+    expandCount += 1;
   }
 
-  let lastBounds=probe.bounds;
-  for (let i=0;i<28;i++) {
-    const mid=(low+high)*0.5;
-    const test=fitsViewport(center, mid, yawAngle, pitchAngle);
-    lastBounds=test.bounds;
-    if (test.fits) high=mid;
-    else low=mid;
+  let lastBounds = probe.bounds;
+  for (let i = 0; i < 28; i++) {
+    const mid = (low + high) * 0.5;
+    const test = fitsViewport(center, mid, yawAngle, pitchAngle);
+    lastBounds = test.bounds;
+    if (test.fits) high = mid;
+    else low = mid;
   }
 
-  graphRadius=Math.max(0.6, lastBounds?.maxExtent || 0.6);
+  graphRadius = Math.max(0.6, lastBounds?.maxExtent || 0.6);
   return high;
 }
 function updateCameraBounds() {
