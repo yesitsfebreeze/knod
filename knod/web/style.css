@@ -1,8 +1,13 @@
 /* ===== knod glass UI ===== */
 
-* { margin: 0; padding: 0; box-sizing: border-box; }
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
 
-html, body {
+html,
+body {
   height: 100%;
   overflow: hidden;
   font-family: "Inter", system-ui, -apple-system, sans-serif;
@@ -140,8 +145,15 @@ html, body {
 }
 
 @keyframes slideIn {
-  from { opacity: 0; transform: translateX(12px); }
-  to   { opacity: 1; transform: translateX(0); }
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }
 
 #detail h2 {
@@ -235,8 +247,15 @@ html, body {
 }
 
 @keyframes loadPulse {
-  0%, 100% { opacity: 0.35; }
-  50%      { opacity: 1; }
+
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+
+  50% {
+    opacity: 1;
+  }
 }
 
 /* ---- Controls panel ---- */

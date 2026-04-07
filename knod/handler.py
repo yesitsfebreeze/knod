@@ -2,7 +2,6 @@
 
 import logging
 import threading
-import time as _time
 from pathlib import Path
 from queue import Queue, Full
 
@@ -55,8 +54,7 @@ class Handler:
 		self._queue_worker: threading.Thread | None = None
 		self._limbo_thread: threading.Thread | None = None
 		self._shutdown = threading.Event()
-		self._in_flight = threading.Event()  # set while an ingest is running
-		# Event bus — replaces raw-socket pub/sub
+		self._in_flight = threading.Event()
 		self._listeners: dict[str, list[EventListener]] = {}
 		self._listeners_lock = threading.Lock()
 		self._retrieval_count: int = 0
@@ -103,8 +101,6 @@ class Handler:
 			self._queue.put(None)  # sentinel
 		self.save()
 
-	# ---- async ingest queue ----
-
 	def enqueue(self, text: str, source: str = "", descriptor: str = "") -> tuple[bool, int]:
 		"""Try to enqueue ingest. Returns (queued, pending_count)."""
 		if self._queue is None:
@@ -129,10 +125,14 @@ class Handler:
 			finally:
 				self._in_flight.clear()
 
-	# ---- core operations ----
-
 	def _ingest_sync(self, text: str, source: str = "", descriptor: str = "") -> IngestResult:
 		result = self.ingester.ingest(text, source, descriptor)
+
+		thought_ids = [t.id for t in result.committed]
+		relinked, pairs_scanned = self._relink_thoughts(self.graph, thought_ids)
+		result.relinked = relinked
+		result.relink_pairs_scanned = pairs_scanned
+
 		with self.mu:
 			# Apply edge decay if configured
 			if self.cfg.decay_coefficient > 0:
@@ -161,6 +161,8 @@ class Handler:
 			"committed_thoughts": [{"id": t.id, "text": t.text[:200]} for t in result.committed],
 			"rejected_to_limbo": result.rejected,
 			"deduplicated": result.deduplicated,
+			"relinked": result.relinked,
+			"relink_pairs_scanned": result.relink_pairs_scanned,
 			"thoughts": self.graph.num_thoughts,
 			"edges": self.graph.num_edges,
 		}
@@ -500,7 +502,57 @@ class Handler:
 
 		return {"nodes": nodes, "edges": edges, "knn_edges": knn_edges}
 
-	# ---- relink / backfill ----
+	def _relink_thoughts(self, graph: Graph, thought_ids: list[int]) -> tuple[int, int]:
+		"""Relink only the specified thought IDs against all existing thoughts.
+
+		Returns (edges_created, pairs_scanned).
+		"""
+		if not thought_ids:
+			return 0, 0
+
+		created = 0
+		scanned = 0
+
+		for tid in thought_ids:
+			if tid not in graph.thoughts:
+				continue
+			thought = graph.thoughts[tid]
+
+			neighbors = graph.find_thoughts(thought.embedding, k=50, threshold=self.cfg.similarity_threshold)
+			candidates = [(t, sim) for t, sim in neighbors if t.id != tid]
+
+			existing_neighbors = {nid for nid, _ in graph.get_neighbors(tid)}
+
+			to_link = [(t, sim) for t, sim in candidates if t.id not in existing_neighbors]
+			scanned += len(to_link)
+
+			if not to_link:
+				continue
+
+			cand_texts = [t.text for t, _ in to_link]
+			results = self.provider.batch_link_reason(thought.text, cand_texts)
+
+			valid = [r for r in results if r["weight"] >= self.cfg.min_link_weight and 0 <= r["index"] < len(to_link)]
+
+			if not valid:
+				continue
+
+			reasoning_texts = [r["reasoning"] for r in valid]
+			embeddings = self.provider.embed_texts(reasoning_texts)
+
+			for r, emb in zip(valid, embeddings):
+				target = to_link[r["index"]][0]
+				edge = graph.add_edge(
+					source_id=thought.id,
+					target_id=target.id,
+					weight=r["weight"],
+					reasoning=r["reasoning"],
+					embedding=emb,
+				)
+				if edge is not None:
+					created += 1
+
+		return created, scanned
 
 	def relink(self) -> dict:
 		"""Scan all thoughts and create missing edges between similar pairs.
@@ -589,8 +641,6 @@ class Handler:
 			"total_edges": self.graph.num_edges,
 			"total_thoughts": self.graph.num_thoughts,
 		}
-
-	# ---- graph inspection tools ----
 
 	def explore_thought(self, thought_id: int) -> dict | None:
 		"""Return a thought with its edges and neighbors, or None if not found.
@@ -772,8 +822,6 @@ class Handler:
 			)
 		return result
 
-	# ---- event bus (replaces raw-socket pub/sub) ----
-
 	def on(self, event: str, listener: EventListener) -> "Handler":
 		"""Register an event listener. event: 'ingest_complete' | 'limbo_promoted' | '*'"""
 		with self._listeners_lock:
@@ -795,8 +843,6 @@ class Handler:
 				listener(event)
 			except Exception:
 				log.exception("Event listener raised for kind=%s", event.kind)
-
-	# ---- strand management ----
 
 	def _upsert_strand_node(self, name: str, strand: "Strand"):
 		"""Upsert a registry node for this strand in the global graph.
@@ -918,8 +964,6 @@ class Handler:
 
 		scored, chains = expand(seeds, query_emb, graph, self.cfg, targets=targets or None)
 		return scored, chains
-
-	# ---- limbo background scan ----
 
 	def _limbo_scan_loop(self):
 		"""Background: scan limbo every cfg.limbo_scan_interval seconds."""

@@ -50,24 +50,35 @@ flowchart TB
             I_MCC_U -- Rejected --> I_LBO
         end
 
+        subgraph INGEST_RELINK ["Phase 5 · Re-link · planned"]
+            direction TB
+            I_RSN[Cosine search:\nfind unlinked similar thoughts\nfor each committed thought]:::planned
+            I_RLK[LLM: evaluate missing links\n+ reasoning per candidate]:::planned
+            I_RFL[Filter: weight ≥ min_link_weight]:::planned
+            I_RER[Embed reasoning strings]:::planned
+            I_RAP([Attach missing edges]):::planned
+            I_RSN --> I_RLK --> I_RFL --> I_RER --> I_RAP
+        end
+
         IN_A --> I_DEC
         I_EMB --> I_SNA
         I_SNA --> I_LNK
         I_EMR --> I_HAS
+        I_ACC --> I_RSN
     end
 
     %% ═══════════════════════════════════════════════════════════
     %% LIMBO
-    %% Input:  Rejected thoughts (no links + mature store)
+    %% Input:  Rejected thoughts
     %% Output: Promoted thoughts → existing or new Strand
     %% ═══════════════════════════════════════════════════════════
-    subgraph LIMBO_SG ["🌀 LIMBO  ·  background scan every 60 s"]
+    subgraph LIMBO_SG ["🌀 LIMBO  ·  background scan every cfg.limbo_scan_interval"]
         direction TB
 
         LB_IN([Rejected Thought]):::limbo
         LB_POOL[(Limbo Pool)]:::limbo
         LB_SIM[Pairwise cosine similarity\nacross all limbo thoughts]:::limbo
-        LB_CC[Greedy connected components\nthreshold = 0.75]:::limbo
+        LB_CC[Greedy connected components\nthreshold = cfg.limbo_cluster_threshold]:::limbo
         LB_CLU{Cluster ≥ 3\nsimilar thoughts?}:::limbo
         LB_NM[LLM: name + describe\nthe cluster]:::limbo
         LB_EP[Embed cluster purpose]:::limbo
@@ -89,7 +100,7 @@ flowchart TB
 
     %% ═══════════════════════════════════════════════════════════
     %% STRAND STORE
-    %% Input:  Committed thoughts, GNN training signal
+    %% Input:  Committed thoughts, optional planned re-linking, GNN training signal
     %% Output: Graph + trained model ready for retrieval
     %% ═══════════════════════════════════════════════════════════
     subgraph STRAND ["🧠 STRAND STORE"]
@@ -104,7 +115,7 @@ flowchart TB
             SP_T --> SP_P
         end
 
-        subgraph SP_GNN ["GNN  ·  retrained async after each commit"]
+        subgraph SP_GNN ["GNN  ·  retrained during default ingest"]
             direction TB
             SP_BASE[Base MPNN\n3-layer message passing\nshared low LR]:::store
             SP_STR[StrandLayer\nper-strand fine-tuning\nadaptive LR]:::store
@@ -134,7 +145,7 @@ flowchart TB
 
         subgraph Q_MERGE ["Merge · per strand"]
             direction TB
-            Q_WGT[Adaptive weighting\nGNN+edges: 0.4·cos + 0.4·gnn + 0.2·edge\nGNN only:  0.5·cos + 0.5·gnn\nCosine only: cos]:::retrieval
+            Q_WGT[Adaptive weighting\nGNN+edges: 0.4·cos + 0.4·gnn + 0.2·edge\nGNN only:  0.5·cos + 0.5·gnn\nEdge only:  0.7·cos + 0.3·edge\nfinal score = max cosine vs blended]:::retrieval
             Q_BST[Access boost\n+log1p·0.02 freq\n+0.05·exp recency]:::retrieval
             Q_THR[Adaptive threshold\nscale floor→cfg between maturity × query-quality]:::retrieval
             Q_WGT --> Q_BST --> Q_THR
@@ -142,8 +153,8 @@ flowchart TB
 
         subgraph Q_EXP ["Graph Traversal Expansion · per strand"]
             direction TB
-            Q_EXP_BFS[Bounded BFS from seeds\ndepth ≤ traversal_depth\nfan-out ≤ traversal_fan_out]:::retrieval
-            Q_EXP_SCR[Score neighbours:\nedge.weight × edge_cos × thought_cos]:::retrieval
+            Q_EXP_BFS[Target-aware Dijkstra path search\nfrom merged seeds toward distant targets\ndepth ≤ traversal_depth\nfan-out ≤ traversal_fan_out]:::retrieval
+            Q_EXP_SCR[Score paths:\n1 minus avg edge cost × terminal thought cosine\nplus target bonus]:::retrieval
             Q_EXP_BFS --> Q_EXP_SCR
         end
 
@@ -169,13 +180,17 @@ flowchart TB
     SP_T        -->|"candidate thoughts"| I_SNA
 
     %% Ingest → Store
-    I_ACC       -->|"commit thought + edges"| SP_T
+    I_ACC       -->|"commit thought + initial edges"| SP_T
+
+    %% Planned post-ingest relink reads live graph and adds missing edges
+    SP_T        -->|"existing thoughts"| I_RSN
+    I_RAP       -->|"attach missing edges"| SP_E
 
     %% Ingest rejects → Limbo
     I_LBO       --> LB_IN
 
-    %% Store update triggers async GNN retrain
-    SP_T        -.->|"async: train_on_graph"| SP_BASE
+    %% Store update triggers training in the default ingest path
+    SP_T        -.->|"train_on_graph"| SP_BASE
 
     %% Limbo: profile comparison uses SP_P
     LB_EP       -->|"compare against"| SP_P
@@ -202,4 +217,5 @@ flowchart TB
     classDef retrieval fill:#3a1a2a,stroke:#be4a7a,color:#f4cce0
     classDef store     fill:#2a3a1a,stroke:#7abe4a,color:#e0f4cc
     classDef limbo     fill:#3a2a1a,stroke:#be8a4a,color:#f4e0cc
+    classDef planned   fill:#4a1f1f,stroke:#ff6b6b,color:#ffd7d7
 ```

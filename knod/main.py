@@ -227,26 +227,25 @@ def _load_handler(cfg: Config):
 
 
 def _do_ingest_file(cfg: Config, filepath: str, descriptor: str = "", knid: str | None = None):
+	log = logging.getLogger(__name__)
 	text = Path(filepath).read_text(encoding="utf-8")
 	handler = _load_handler(cfg)
 
 	if knid:
-		# Ingest into all stores in the knid
 		store_names = handler.registry.stores_in_knid(knid)
 		if not store_names:
-			print(f"No stores in knid '{knid}'")
+			log.warning("No stores in knid '%s'", knid)
 			handler.shutdown()
 			return
 		for sname in store_names:
 			try:
 				n = handler.ingest_into_strand(sname, text, source=Path(filepath).stem, descriptor=descriptor)
-				print(f"  {sname}: {n} thoughts committed")
+				log.info("%s: %d thoughts committed", sname, n)
 			except KeyError:
-				print(f"  {sname}: not loaded, skipping")
+				log.info("%s: not loaded, skipping", sname)
 	else:
 		stats = handler.ingest_sync(text, source=Path(filepath).stem, descriptor=descriptor)
-		print(f"Ingested from {filepath}")
-		print(f"Graph: {stats['thoughts']} thoughts, {stats['edges']} edges")
+		log.info("Ingested from %s — %d thoughts, %d edges", filepath, stats["thoughts"], stats["edges"])
 
 	handler.shutdown()
 
@@ -265,71 +264,72 @@ def _do_ask(cfg: Config, query: str, knid: str | None = None):
 
 
 def _do_explore(cfg: Config):
+	log = logging.getLogger(__name__)
 	base = Path(cfg.graph_path).with_suffix("")
 	knod_file = base.with_suffix(".knod")
 
 	if not knod_file.exists():
-		print("No graph found.")
+		log.warning("No graph found")
 		return
 
 	handler = _load_handler(cfg)
 	info = handler.graph_info
-	print(f"Purpose: {info['purpose'] or '(none)'}")
-	print(f"Thoughts: {info['thought_count']}")
-	print(f"Edges: {info['edge_count']}")
-	print(f"Maturity: {info['maturity']:.2f}")
+	log.info("Purpose: %s", info["purpose"] or "(none)")
+	log.info("Thoughts: %d", info["thought_count"])
+	log.info("Edges: %d", info["edge_count"])
+	log.info("Maturity: %.2f", info["maturity"])
 	if info["descriptors"]:
-		print(f"Descriptors: {', '.join(info['descriptors'].keys())}")
+		log.info("Descriptors: %s", ", ".join(info["descriptors"].keys()))
 
 
 def _do_ingest_corpus(cfg: Config, corpus_dir: str):
+	log = logging.getLogger(__name__)
 	corpus = Path(corpus_dir)
 	if not corpus.is_dir():
-		print(f"Directory not found: {corpus_dir}")
+		log.error("Directory not found: %s", corpus_dir)
 		sys.exit(1)
 
 	files = sorted(corpus.glob("*.txt"))
 	if not files:
-		print(f"No .txt files in {corpus_dir}")
+		log.warning("No .txt files in %s", corpus_dir)
 		sys.exit(1)
 
 	handler = _load_handler(cfg)
 
-	# Collect already-ingested sources to skip duplicates
 	ingested = handler.ingested_sources()
 
 	for i, f in enumerate(files, 1):
 		if f.name == "manifest.txt":
 			continue
 		if f.stem in ingested:
-			print(f"[{i}/{len(files)}] {f.name} (already ingested, skipping)")
+			log.info("[%d/%d] %s (already ingested, skipping)", i, len(files), f.name)
 			continue
-		print(f"[{i}/{len(files)}] {f.name}")
+		log.info("[%d/%d] %s", i, len(files), f.name)
 		text = f.read_text(encoding="utf-8")
 		try:
 			stats = handler.ingest_sync(text, source=f.stem)
-			print(f"  → {stats['thoughts']} thoughts, {stats['edges']} edges")
+			log.info("  → %d thoughts, %d edges", stats["thoughts"], stats["edges"])
 			handler.save()
 		except Exception as exc:
-			print(f"  ✗ {exc}")
+			log.error("  ✗ %s", exc)
 			handler.save()
 			continue
 
 	handler.shutdown()
 	info = handler.graph_info
-	print(f"\nDone. Graph: {info['thought_count']} thoughts, {info['edge_count']} edges")
+	log.info("Done. Graph: %d thoughts, %d edges", info["thought_count"], info["edge_count"])
 
 
 def _do_new(cfg: Config, knid: str | None = None):
-	"""Interactive: create a new strand graph."""
+	log = logging.getLogger(__name__)
 	purpose = input("Purpose: ").strip()
 	if not purpose:
-		print("Purpose is required.")
+		log.warning("Purpose is required")
 		return
 
 	name = input("Name: ").strip()
 	if not name:
-		print("Name is required.")
+		log.warning("Name is required")
 		return
 
 	location = input(f"Location [{Path.cwd()}]: ").strip()
@@ -340,29 +340,28 @@ def _do_new(cfg: Config, knid: str | None = None):
 	graph_path = handler.create_strand(name, purpose, location, knid=knid)
 
 	if knid:
-		print(f"Added to knid '{knid}'")
+		log.info("Added to knid '%s'", knid)
 
-	print(f"Created strand '{name}' at {graph_path}")
+	log.info("Created strand '%s' at %s", name, graph_path)
 	handler.shutdown()
 
 
 def _do_register(cfg: Config, path: str, knid: str | None = None):
-	"""Register an existing graph file."""
+	log = logging.getLogger(__name__)
 	from .registry import Registry
 	from .strand.store import read_knod_metadata
 
 	graph_path = Path(path)
 	if not graph_path.exists():
-		print(f"File not found: {path}")
+		log.error("File not found: %s", path)
 		sys.exit(1)
 
-	# Validate: try to read metadata
 	try:
 		meta = read_knod_metadata(str(graph_path))
 		name = meta.get("name") or graph_path.stem
 		purpose = meta.get("purpose", "")
 	except Exception:
-		print(f"Invalid graph file: {path}")
+		log.error("Invalid graph file: %s", path)
 		sys.exit(1)
 
 	registry = Registry()
@@ -370,13 +369,13 @@ def _do_register(cfg: Config, path: str, knid: str | None = None):
 
 	if knid:
 		registry.add_to_knid(knid, name)
-		print(f"Added to knid '{knid}'")
+		log.info("Added to knid '%s'", knid)
 
-	print(f"Registered '{name}' (purpose: {purpose or '(none)'})")
+	log.info("Registered '%s' (purpose: %s)", name, purpose or "(none)")
 
 
 def _do_list(cfg: Config, knid: str | None = None):
-	"""List registered stores, optionally filtered by knid."""
+	log = logging.getLogger(__name__)
 	from .registry import Registry
 
 	registry = Registry()
@@ -384,23 +383,23 @@ def _do_list(cfg: Config, knid: str | None = None):
 	if knid:
 		members = registry.stores_in_knid(knid)
 		if not members:
-			print(f"No stores in knid '{knid}'")
+			log.info("No stores in knid '%s'", knid)
 			return
-		print(f"Stores in knid '{knid}':")
+		log.info("Stores in knid '%s':", knid)
 		for name in sorted(members):
 			entry = registry.stores.get(name, {})
 			print(f"  {name} = {entry.get('path', '(unknown)')}")
 	else:
 		stores = registry.list_stores()
 		if not stores:
-			print("No registered stores.")
+			log.info("No registered stores")
 			return
 		for name, entry in stores.items():
 			print(f"  {name} = {entry['path']}")
 
 
 def _do_knid(cfg: Config, args):
-	"""Handle knid subcommands."""
+	log = logging.getLogger(__name__)
 	from .registry import Registry
 
 	registry = Registry()
@@ -409,38 +408,38 @@ def _do_knid(cfg: Config, args):
 	if cmd == "new":
 		name = args.name
 		if name in registry.knids:
-			print(f"Knid '{name}' already exists")
+			log.info("Knid '%s' already exists", name)
 			return
 		registry.knids[name] = set()
 		registry.save()
-		print(f"Created knid '{name}'")
+		log.info("Created knid '%s'", name)
 
 	elif cmd == "add":
 		if args.store not in registry.stores:
-			print(f"Store '{args.store}' is not registered")
+			log.warning("Store '%s' is not registered", args.store)
 			return
 		registry.add_to_knid(args.name, args.store)
-		print(f"Added '{args.store}' to knid '{args.name}'")
+		log.info("Added '%s' to knid '%s'", args.store, args.name)
 
 	elif cmd == "remove":
 		if registry.remove_from_knid(args.name, args.store):
-			print(f"Removed '{args.store}' from knid '{args.name}'")
+			log.info("Removed '%s' from knid '%s'", args.store, args.name)
 		else:
-			print(f"'{args.store}' not found in knid '{args.name}'")
+			log.warning("'%s' not found in knid '%s'", args.store, args.name)
 
 	elif cmd == "list":
 		if args.name:
 			members = registry.stores_in_knid(args.name)
 			if not members:
-				print(f"No stores in knid '{args.name}'")
+				log.info("No stores in knid '%s'", args.name)
 			else:
-				print(f"Knid '{args.name}':")
+				log.info("Knid '%s':", args.name)
 				for m in sorted(members):
 					print(f"  {m}")
 		else:
 			knids = registry.list_knids()
 			if not knids:
-				print("No knids defined.")
+				log.info("No knids defined")
 			else:
 				for name, members in knids.items():
 					print(f"  [{name}] {', '.join(sorted(members)) or '(empty)'}")
@@ -450,15 +449,15 @@ def _do_knid(cfg: Config, args):
 
 
 def _do_migrate():
-	"""Rename all store files from human-readable names to SHA-256 hashed names."""
+	log = logging.getLogger(__name__)
 	from .registry import Registry
 
 	registry = Registry()
 	n = registry.migrate_to_hashed()
 	if n:
-		print(f"Migrated {n} store(s) to hashed filenames.")
+		log.info("Migrated %d store(s) to hashed filenames", n)
 	else:
-		print("All stores already use hashed filenames (nothing to migrate).")
+		log.info("All stores already use hashed filenames (nothing to migrate)")
 
 
 if __name__ == "__main__":

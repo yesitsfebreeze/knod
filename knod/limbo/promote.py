@@ -18,7 +18,7 @@ import numpy as np
 
 from ..config import Config
 from ..provider import Provider
-from ..registry import store_path
+from ..registry import Registry, store_path
 from ..strand.graph import Graph, LimboThought
 from ..strand.gnn import KnodMPNN, StrandLayer
 from ..strand.store import save_all, load_base_model
@@ -95,10 +95,10 @@ def bootstrap_thoughts(
 
 def promote_cluster(
 	cluster: list[LimboThought],
-	strands: dict,  # dict[str, Strand]
+	strands: dict[str, Strand],
 	provider: Provider,
 	cfg: Config,
-	registry,
+	registry: Registry,
 	graph_base_path: str,
 ) -> str | None:
 	"""Promote a limbo cluster: try existing strand, else spawn new one.
@@ -144,10 +144,10 @@ def _spawn_strand(
 	name: str,
 	purpose: str,
 	cluster: list[LimboThought],
-	strands: dict,
+	strands: dict[str, Strand],
 	provider: Provider,
 	cfg: Config,
-	registry,
+	registry: Registry,
 	graph_base_path: str,
 ) -> str:
 	"""Create a new strand graph from a limbo cluster, link thoughts, and train."""

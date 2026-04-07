@@ -107,20 +107,26 @@ def load_model(model: KnodMPNN, strand: StrandLayer, path: str | Path):
 
 # ---- Shared base GNN checkpoint ----
 
-_BASE_GNN_PATH = Path.home() / ".config" / "knod" / "base.gnn"
+_DEFAULT_BASE_GNN_PATH = Path.home() / ".config" / "knod" / "base.gnn"
 
 
-def save_base_model(model: KnodMPNN):
-	"""Save the shared base MPNN to ~/.config/knod/base.gnn."""
-	_BASE_GNN_PATH.parent.mkdir(parents=True, exist_ok=True)
-	torch.save({"model": model.state_dict()}, _BASE_GNN_PATH)
+def _get_base_gnn_path(cfg) -> Path:
+	return Path(cfg.base_gnn_path) if cfg.base_gnn_path else _DEFAULT_BASE_GNN_PATH
 
 
-def load_base_model(model: KnodMPNN) -> bool:
-	"""Load the shared base MPNN from ~/.config/knod/base.gnn. Returns True if loaded."""
-	if not _BASE_GNN_PATH.exists():
+def save_base_model(model: KnodMPNN, cfg=None):
+	"""Save the shared base MPNN to ~/.config/knod/base.gnn (or cfg.base_gnn_path)."""
+	path = _get_base_gnn_path(cfg) if cfg else _DEFAULT_BASE_GNN_PATH
+	path.parent.mkdir(parents=True, exist_ok=True)
+	torch.save({"model": model.state_dict()}, path)
+
+
+def load_base_model(model: KnodMPNN, cfg=None) -> bool:
+	"""Load the shared base MPNN. Returns True if loaded."""
+	path = _get_base_gnn_path(cfg) if cfg else _DEFAULT_BASE_GNN_PATH
+	if not path.exists():
 		return False
-	checkpoint = torch.load(_BASE_GNN_PATH, weights_only=True)
+	checkpoint = torch.load(path, weights_only=True)
 	model.load_state_dict(checkpoint["model"])
 	return True
 

@@ -51,6 +51,7 @@ class Config:
 
 	# Paths
 	graph_path: str = ".knod/knod.knod"
+	base_gnn_path: str = ""
 
 	@classmethod
 	def load(cls) -> "Config":
