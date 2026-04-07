@@ -3,7 +3,11 @@
 		"knod": {
 			"type": "stdio",
 			"command": "python",
-			"args": ["-m", "py_knod", "mcp"]
+			"args": [
+				"-m",
+				"py_knod",
+				"mcp"
+			]
 		}
 	}
 }
