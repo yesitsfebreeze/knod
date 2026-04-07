@@ -18,6 +18,7 @@ import numpy as np
 
 from ..config import Config
 from ..provider import Provider
+from ..registry import store_path
 from ..specialist.graph import Graph, LimboThought
 from ..specialist.gnn import KnodMPNN, StrandLayer
 from ..specialist.store import save_all, load_base_model
@@ -153,9 +154,11 @@ def _spawn_specialist(
 	from ..specialist.graph import Graph as SpecGraph
 
 	graph = SpecGraph(
+		name=name,
 		purpose=purpose,
 		max_thoughts=cfg.max_thoughts,
 		max_edges=cfg.max_edges,
+		maturity_divisor=cfg.maturity_divisor,
 	)
 	model = KnodMPNN(cfg)
 	strand = StrandLayer(cfg.hidden_dim)
@@ -172,13 +175,13 @@ def _spawn_specialist(
 	# Bootstrap: link between cluster thoughts + train GNN
 	bootstrap_thoughts(new_ids, graph, model, strand, provider, cfg)
 
-	safe_name = name.replace(" ", "_").lower()
-	knod_dir = Path(graph_base_path).with_suffix("").parent
-	base = knod_dir / safe_name
+	store_dir = Path(graph_base_path).with_suffix("").parent
+	hashed_path = store_path(store_dir, name)
+	base = hashed_path.with_suffix("")
 	save_all(graph, model, strand, base)
 
-	knod_path = str(base.with_suffix(".knod").resolve())
-	registry.register(name, knod_path, purpose)
+	graph_path = str(hashed_path)
+	registry.register(graph_path)
 
 	from ..handler import Specialist
 

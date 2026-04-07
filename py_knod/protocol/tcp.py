@@ -21,7 +21,7 @@ import socket
 import struct
 import threading
 
-from ..handler import Handler
+from ..handler import Handler, GraphEvent
 
 log = logging.getLogger(__name__)
 
@@ -44,29 +44,29 @@ def _send_frame(sock: socket.socket, data: bytes):
 	sock.sendall(_HEADER.pack(len(data)) + data)
 
 
-def _dispatch(sock: socket.socket, handler: Handler, text: str) -> str:
+def _dispatch(sock: socket.socket, handler: Handler, text: str, subscribers: set) -> str:
 	"""Route a command string to the handler. Returns response string."""
 	stripped = text.strip()
 
 	if stripped == "STATUS":
-		return handler.handle_status()
+		return handler.status()
 
 	if stripped == "SUBSCRIBE":
-		handler.subscribe(sock)
+		subscribers.add(sock)
 		return "subscribed"
 
 	if stripped == "UNSUBSCRIBE":
-		handler.unsubscribe(sock)
+		subscribers.discard(sock)
 		return "unsubscribed"
 
 	if text.startswith("PURPOSE:"):
 		purpose = text[len("PURPOSE:") :].strip()
-		handler.handle_set_purpose(purpose)
+		handler.set_purpose(purpose)
 		return "ok"
 
 	if text.startswith("ASK:"):
 		query = text[len("ASK:") :]
-		answer, _ = handler.handle_ask(query)
+		answer, _ = handler.ask(query)
 		return answer
 
 	if text.startswith("DESCRIPTOR_ADD:"):
@@ -75,12 +75,12 @@ def _dispatch(sock: socket.socket, handler: Handler, text: str) -> str:
 			name, desc_text = rest.split("\n", 1)
 		else:
 			name, desc_text = rest.strip(), ""
-		handler.handle_descriptor_add(name.strip(), desc_text)
+		handler.add_descriptor(name.strip(), desc_text)
 		return "ok"
 
 	if text.startswith("DESCRIPTOR_REMOVE:"):
 		name = text[len("DESCRIPTOR_REMOVE:") :].strip()
-		return "ok" if handler.handle_descriptor_remove(name) else "not found"
+		return "ok" if handler.remove_descriptor(name) else "not found"
 
 	if text.startswith("INGEST_D:"):
 		rest = text[len("INGEST_D:") :]
@@ -89,17 +89,17 @@ def _dispatch(sock: socket.socket, handler: Handler, text: str) -> str:
 		else:
 			desc_name, ingest_text = "", rest
 		desc_name = desc_name.strip()
-		descriptor = handler.graph.descriptors.get(desc_name, "") if desc_name else ""
-		return handler.handle_ingest_queued(ingest_text, descriptor=descriptor)
+		descriptor = handler.resolve_descriptor(desc_name) if desc_name else ""
+		return handler.ingest(ingest_text, descriptor=descriptor)
 
 	# Plain text → ingest
 	if text:
-		return handler.handle_ingest_queued(text)
+		return handler.ingest(text)
 
 	return ""
 
 
-def _handle_framed(sock: socket.socket, handler: Handler, first_hdr: bytes):
+def _handle_framed(sock: socket.socket, handler: Handler, first_hdr: bytes, subscribers: set):
 	"""Persistent framed session: read frames, dispatch, reply."""
 	try:
 		hdr = bytearray(first_hdr)
@@ -113,18 +113,18 @@ def _handle_framed(sock: socket.socket, handler: Handler, first_hdr: bytes):
 				continue
 
 			body = _recv_exact(sock, msg_len).decode("utf-8", errors="replace")
-			reply = _dispatch(sock, handler, body)
+			reply = _dispatch(sock, handler, body, subscribers)
 			_send_frame(sock, reply.encode("utf-8"))
 
 			hdr = bytearray(_recv_exact(sock, 4))
 	except (ConnectionError, OSError):
 		pass
 	finally:
-		handler.unsubscribe(sock)
+		subscribers.discard(sock)
 		sock.close()
 
 
-def _handle_legacy(sock: socket.socket, handler: Handler, first_byte: bytes):
+def _handle_legacy(sock: socket.socket, handler: Handler, first_byte: bytes, subscribers: set):
 	"""Legacy single-shot: read all data, dispatch once, close."""
 	try:
 		sock.settimeout(1.0)
@@ -138,7 +138,7 @@ def _handle_legacy(sock: socket.socket, handler: Handler, first_byte: bytes):
 			except socket.timeout:
 				break
 		text = b"".join(parts).decode("utf-8", errors="replace")
-		reply = _dispatch(sock, handler, text)
+		reply = _dispatch(sock, handler, text, subscribers)
 		sock.sendall(reply.encode("utf-8"))
 	except (ConnectionError, OSError):
 		pass
@@ -146,7 +146,7 @@ def _handle_legacy(sock: socket.socket, handler: Handler, first_byte: bytes):
 		sock.close()
 
 
-def _handle_connection(sock: socket.socket, handler: Handler):
+def _handle_connection(sock: socket.socket, handler: Handler, subscribers: set):
 	"""Detect protocol mode from first byte, then dispatch."""
 	try:
 		first = _recv_exact(sock, 1)
@@ -156,7 +156,7 @@ def _handle_connection(sock: socket.socket, handler: Handler):
 
 	if first[0] >= 0x20:
 		# ASCII → legacy single-shot
-		_handle_legacy(sock, handler, first)
+		_handle_legacy(sock, handler, first, subscribers)
 	else:
 		# Binary → framed session, read remaining 3 bytes of header
 		try:
@@ -164,7 +164,7 @@ def _handle_connection(sock: socket.socket, handler: Handler):
 		except ConnectionError:
 			sock.close()
 			return
-		_handle_framed(sock, handler, first + rest)
+		_handle_framed(sock, handler, first + rest, subscribers)
 
 
 def _tcp(handler: Handler, port: int = 7999) -> "TCPServer":
@@ -181,6 +181,25 @@ class TCPServer:
 		self._socket: socket.socket | None = None
 		self._thread: threading.Thread | None = None
 		self._running = False
+		# TCP owns its own subscriber list; sockets are transport-level state
+		self._subscribers: set[socket.socket] = set()
+		self._subs_lock = threading.Lock()
+		# Wire up event listener to push events to all active subscribers
+		handler.on("ingest_complete", self._on_event)
+		handler.on("limbo_promoted", self._on_event)
+
+	def _on_event(self, event: GraphEvent) -> None:
+		"""Push a status update to all subscribed sockets."""
+		msg = self.handler.status().encode("utf-8")
+		hdr = _HEADER.pack(len(msg))
+		with self._subs_lock:
+			dead = set()
+			for sock in self._subscribers:
+				try:
+					sock.sendall(hdr + msg)
+				except OSError:
+					dead.add(sock)
+			self._subscribers -= dead
 
 	def start(self):
 		self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -204,7 +223,7 @@ class TCPServer:
 				client, addr = self._socket.accept()
 				t = threading.Thread(
 					target=_handle_connection,
-					args=(client, self.handler),
+					args=(client, self.handler, self._subscribers),
 					daemon=True,
 				)
 				t.start()

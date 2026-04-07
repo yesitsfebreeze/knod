@@ -1,6 +1,8 @@
 """Configuration management — reads from ~/.config/knod/config or env vars."""
 
+import dataclasses
 import os
+import typing
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -14,15 +16,14 @@ class Config:
 	embedding_dim: int = 1536
 	hidden_dim: int = 512
 	num_layers: int = 3
-
-	# GNN training
+	fallback_base_url: str = ""
+	fallback_api_key: str = "ollama"
+	fallback_chat_model: str = ""
 	edge_mask_ratio: float = 0.15
 	margin: float = 0.1
 	lr_max: float = 1e-3
 	lr_min: float = 5e-5
 	weight_decay: float = 0.01
-
-	# Graph
 	similarity_threshold: float = 0.7
 	min_link_weight: float = 0.1
 	maturity_divisor: int = 50
@@ -30,21 +31,15 @@ class Config:
 	max_thoughts: int = 0  # 0 = unlimited
 	max_edges: int = 0  # 0 = unlimited
 	decay_coefficient: float = 0.0  # per-hour edge weight decay; 0 = disabled
-
-	# Dedup
 	dedup_threshold: float = 0.95  # cosine similarity above which a new thought merges into existing
-
-	# Limbo
 	limbo_scan_interval: float = 60.0  # seconds between scans
 	limbo_cluster_min: int = 3  # minimum cluster size to promote
 	limbo_cluster_threshold: float = 0.50  # cosine threshold for clustering
 	specialist_match_threshold: float = 0.8
-
-	# Confidence gating
-	confidence_threshold: float = 0.85  # merged score above which LLM generation is skipped
-
-	# Query routing
+	confidence_threshold: float = 0.85
 	query_routing_threshold: float = 0.3  # min profile similarity to include specialist in query
+	traversal_depth: int = 2  # max hops in Dijkstra path expansion
+	traversal_fan_out: int = 10  # max new nodes discovered per expand() call
 
 	# Server
 	tcp_port: int = 7999
@@ -57,7 +52,6 @@ class Config:
 	def load(cls) -> "Config":
 		cfg = cls()
 
-		# Try config file (flat key=value, no section headers)
 		config_path = Path.home() / ".config" / "knod" / "config"
 		if config_path.exists():
 			kv: dict[str, str] = {}
@@ -69,43 +63,24 @@ class Config:
 					k, v = line.split("=", 1)
 					kv[k.strip()] = v.strip()
 
-			for key in (
-				"api_key",
-				"base_url",
-				"embedding_model",
-				"chat_model",
-				"graph_path",
-			):
-				if key in kv:
-					setattr(cfg, key, kv[key])
-			for key in (
-				"http_port",
-				"tcp_port",
-				"embedding_dim",
-				"hidden_dim",
-				"num_layers",
-				"max_thoughts",
-				"max_edges",
-				"limbo_cluster_min",
-			):
-				if key in kv:
-					setattr(cfg, key, int(kv[key]))
-			for key in (
-				"similarity_threshold",
-				"min_link_weight",
-				"edge_mask_ratio",
-				"decay_coefficient",
-				"dedup_threshold",
-				"limbo_scan_interval",
-				"limbo_cluster_threshold",
-				"specialist_match_threshold",
-				"query_routing_threshold",
-				"confidence_threshold",
-			):
-				if key in kv:
-					setattr(cfg, key, float(kv[key]))
+			hints = typing.get_type_hints(cls)
+			for f in dataclasses.fields(cls):
+				if f.name not in kv:
+					continue
+				raw = kv[f.name]
+				ftype = hints.get(f.name, str)
+				try:
+					if ftype is int:
+						setattr(cfg, f.name, int(raw))
+					elif ftype is float:
+						setattr(cfg, f.name, float(raw))
+					elif ftype is bool:
+						setattr(cfg, f.name, raw.lower() in ("1", "true", "yes"))
+					else:
+						setattr(cfg, f.name, raw)
+				except (ValueError, TypeError):
+					pass
 
-		# Env overrides
 		if v := os.environ.get("OPENAI_API_KEY"):
 			cfg.api_key = v
 		if v := os.environ.get("KNOD_BASE_URL"):

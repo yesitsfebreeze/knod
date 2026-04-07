@@ -1,41 +1,67 @@
 """Specialist registry — store list + knid groupings at ~/.config/knod/stores.
 
-Format (INI-style):
-  name = /path/to/graph.graph
-  other = /path/to/other.graph
+Format:
+  /path/to/specialist.knod
+  /path/to/other.knod
 
   [health]
-  medical
-  anatomy
+  Medical Specialist
+  Anatomy Specialist
 
   [marine]
-  sea_turtles
+  Sea Turtle Specialist
+
+Names and purposes are read from .knod file metadata on load.
 """
 
+import hashlib
 import logging
 from pathlib import Path
 
 log = logging.getLogger(__name__)
 
 
+def store_hash(name: str) -> str:
+	"""SHA-256 hash of a specialist name, used as opaque filename."""
+	return hashlib.sha256(name.lower().strip().encode("utf-8")).hexdigest()
+
+
+def store_path(store_dir: str | Path, name: str) -> Path:
+	"""Return the hashed .knod path for a specialist name inside *store_dir*."""
+	return Path(store_dir) / f"{store_hash(name)}.knod"
+
+
 class Registry:
 	"""Manages specialist entries and knid groupings.
 
-	Persists to ~/.config/knod/stores in INI-like format.
-	Top-level lines are ``name = /path/to/graph.graph`` entries.
+	Persists to ~/.config/knod/stores.
+	Top-level lines are paths to .knod files.
 	``[knid_name]`` sections list store names belonging to that knid.
+
+	On load, each .knod file is read for its name and purpose metadata.
 	"""
 
 	def __init__(self):
 		self._path = Path.home() / ".config" / "knod" / "stores"
-		self.stores: dict[str, dict[str, str]] = {}
+		self.stores: dict[str, dict[str, str]] = {}  # name → {"path", "purpose"}
 		self.knids: dict[str, set[str]] = {}
 		self._load()
+
+	def _read_metadata(self, path: str) -> dict | None:
+		"""Read name and purpose from a .knod file. Returns None on failure."""
+		try:
+			from .specialist import read_knod_metadata
+			meta = read_knod_metadata(path)
+			return meta
+		except Exception:
+			log.warning("Failed to read metadata from %s", path, exc_info=True)
+			return None
 
 	def _load(self):
 		if not self._path.exists():
 			return
 		current_knid = None
+		paths: list[str] = []  # collect paths first, index after
 		for line in self._path.read_text(encoding="utf-8").splitlines():
 			line = line.strip()
 			if not line or line.startswith("#"):
@@ -49,19 +75,57 @@ class Registry:
 			if current_knid is not None:
 				# Lines inside a knid section are store names
 				self.knids[current_knid].add(line)
-			elif "=" in line:
-				name, _, path = line.partition("=")
-				name = name.strip()
-				path = path.strip()
-				if name and path:
-					self.stores[name] = {"path": path, "purpose": ""}
+			else:
+				# Legacy format: name = path
+				if "=" in line:
+					_, _, path = line.partition("=")
+					path = path.strip()
+				else:
+					path = line
+				if path:
+					resolved = str(Path(path).resolve())
+					paths.append(resolved)
+
+		# Index each path by reading .knod metadata
+		for resolved in paths:
+			if not Path(resolved).exists():
+				log.info("pruning stale store (file missing): %s", resolved)
+				continue
+			meta = self._read_metadata(resolved)
+			if meta is None:
+				log.warning("skipping unreadable store: %s", resolved)
+				continue
+			name = meta.get("name") or Path(resolved).stem
+			purpose = meta.get("purpose", "")
+			self.stores[name] = {"path": resolved, "purpose": purpose}
+
+		# Prune knid members that don't correspond to any loaded store
+		changed = False
+		for members in self.knids.values():
+			stale = members - set(self.stores.keys())
+			if stale:
+				members -= stale
+				changed = True
+		if changed:
+			self.knids = {k: v for k, v in self.knids.items() if v}
+			self.save()
+
+	def _append(self, path: str):
+		"""Append a single store path without rewriting the file."""
+		self._path.parent.mkdir(parents=True, exist_ok=True)
+		with self._path.open("a", encoding="utf-8") as f:
+			f.write(f"{path}\n")
 
 	def save(self):
 		self._path.parent.mkdir(parents=True, exist_ok=True)
 		lines = []
-		# Store entries
-		for name, entry in self.stores.items():
-			lines.append(f"{name} = {entry['path']}")
+		# Store entries — just paths
+		seen_paths = set()
+		for entry in self.stores.values():
+			p = entry["path"]
+			if p not in seen_paths:
+				lines.append(p)
+				seen_paths.add(p)
 		# Knid sections
 		for knid_name, members in self.knids.items():
 			lines.append("")
@@ -70,9 +134,18 @@ class Registry:
 				lines.append(member)
 		self._path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
-	def register(self, name: str, path: str, purpose: str = ""):
-		self.stores[name] = {"path": path, "purpose": purpose}
-		self.save()
+	def register(self, path: str, name: str = "", purpose: str = ""):
+		"""Register a .knod file. Name and purpose are read from the file if not provided."""
+		resolved = str(Path(path).resolve())
+		if not name or not purpose:
+			meta = self._read_metadata(resolved)
+			if meta:
+				name = name or meta.get("name") or Path(resolved).stem
+				purpose = purpose or meta.get("purpose", "")
+			else:
+				name = name or Path(resolved).stem
+		self.stores[name] = {"path": resolved, "purpose": purpose}
+		self._append(resolved)
 
 	def unregister(self, name: str):
 		self.stores.pop(name, None)
@@ -113,3 +186,37 @@ class Registry:
 	def stores_in_knid(self, knid_name: str) -> set[str]:
 		"""Return store names in a specific knid."""
 		return set(self.knids.get(knid_name, set()))
+
+	def migrate_to_hashed(self):
+		"""Rename store files from human-readable names to SHA-256 hashed names.
+
+		Skips stores whose file is already a 64-hex-char hash. Updates
+		the registry paths in-place and rewrites the stores file.
+		"""
+		import re
+		migrated = 0
+		for name, entry in list(self.stores.items()):
+			old = Path(entry["path"])
+			if not old.exists():
+				continue
+			stem = old.stem
+			# Already hashed — 64 hex chars
+			if re.fullmatch(r"[0-9a-f]{64}", stem):
+				continue
+			new = store_path(old.parent, name)
+			if new.exists():
+				log.warning("Hash collision during migrate: %s → %s (target exists)", old, new)
+				continue
+			# Rename the main .knod file
+			old.rename(new)
+			entry["path"] = str(new)
+			# Rename companion files (.graphlog, legacy .graph, .pt)
+			for suffix in (".graphlog", ".graph", ".pt"):
+				companion = old.with_suffix(suffix)
+				if companion.exists():
+					companion.rename(new.with_suffix(suffix))
+			migrated += 1
+			log.info("Migrated '%s': %s → %s", name, old.name, new.name)
+		if migrated:
+			self.save()
+		return migrated

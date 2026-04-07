@@ -6,8 +6,9 @@ logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(mes
 
 from py_knod.config import Config
 from py_knod.handler import Handler
-from py_knod.storage.graph import Graph
-from py_knod.storage import KnodMPNN, StrandLayer, GNNTrainer, Ingester
+from py_knod.specialist.graph import Graph
+from py_knod.specialist import KnodMPNN, StrandLayer, GNNTrainer
+from py_knod.ingest import Ingester
 
 cfg = Config.load()
 handler = Handler(cfg)

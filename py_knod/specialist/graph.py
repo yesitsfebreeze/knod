@@ -15,6 +15,28 @@ class Thought:
 	access_count: int = 0
 	last_accessed: float = 0.0
 
+	def to_dict(self) -> dict:
+		return {
+			"text": self.text,
+			"embedding": self.embedding,
+			"source": self.source,
+			"created_at": self.created_at,
+			"access_count": self.access_count,
+			"last_accessed": self.last_accessed,
+		}
+
+	@classmethod
+	def from_dict(cls, tid: int, d: dict) -> "Thought":
+		return cls(
+			id=tid,
+			text=d["text"],
+			embedding=d["embedding"],
+			source=d.get("source", ""),
+			created_at=d.get("created_at", 0.0),
+			access_count=d.get("access_count", 0),
+			last_accessed=d.get("last_accessed", 0.0),
+		)
+
 
 @dataclass
 class Edge:
@@ -26,6 +48,29 @@ class Edge:
 	source: str = ""
 	created_at: float = field(default_factory=time.time)
 
+	def to_dict(self) -> dict:
+		return {
+			"source_id": self.source_id,
+			"target_id": self.target_id,
+			"weight": self.weight,
+			"reasoning": self.reasoning,
+			"embedding": self.embedding,
+			"source": self.source,
+			"created_at": self.created_at,
+		}
+
+	@classmethod
+	def from_dict(cls, d: dict) -> "Edge":
+		return cls(
+			source_id=d["source_id"],
+			target_id=d["target_id"],
+			weight=d["weight"],
+			reasoning=d["reasoning"],
+			embedding=d["embedding"],
+			source=d.get("source", ""),
+			created_at=d.get("created_at", 0.0),
+		)
+
 
 @dataclass
 class LimboThought:
@@ -36,9 +81,29 @@ class LimboThought:
 	source: str = ""
 	created_at: float = field(default_factory=time.time)
 
+	def to_dict(self) -> dict:
+		return {
+			"text": self.text,
+			"embedding": self.embedding,
+			"source": self.source,
+			"created_at": self.created_at,
+		}
+
+	@classmethod
+	def from_dict(cls, d: dict) -> "LimboThought":
+		return cls(
+			text=d["text"],
+			embedding=d["embedding"],
+			source=d.get("source", ""),
+			created_at=d.get("created_at", 0.0),
+		)
+
 
 class Graph:
-	def __init__(self, purpose: str = "", max_thoughts: int = 0, max_edges: int = 0):
+	def __init__(
+		self, name: str = "", purpose: str = "", max_thoughts: int = 0, max_edges: int = 0, maturity_divisor: int = 50
+	):
+		self.name: str = name
 		self.purpose: str = purpose
 		self.thoughts: dict[int, Thought] = {}
 		self.edges: list[Edge] = []
@@ -49,6 +114,7 @@ class Graph:
 		self.limbo: list[LimboThought] = []
 		self.max_thoughts: int = max_thoughts  # 0 = unlimited
 		self.max_edges: int = max_edges  # 0 = unlimited
+		self.maturity_divisor: int = maturity_divisor
 
 	@property
 	def num_thoughts(self) -> int:
@@ -60,7 +126,7 @@ class Graph:
 
 	@property
 	def maturity(self) -> float:
-		return min(self.num_thoughts / 50.0, 1.0)
+		return min(self.num_thoughts / max(self.maturity_divisor, 1), 1.0)
 
 	@property
 	def profile(self) -> np.ndarray | None:

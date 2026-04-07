@@ -3,6 +3,7 @@
 from .graph import Graph, Thought, Edge, LimboThought
 from .gnn import KnodMPNN, StrandLayer
 from .trainer import GNNTrainer
+from .types import GraphEvent, EventListener, SpecialistIndexEntry, Specialist
 from .store import (
 	GraphLog,
 	save_graph,
@@ -17,6 +18,7 @@ from .store import (
 	load_all,
 	save_knod,
 	load_knod,
+	read_knod_metadata,
 )
 
 __all__ = [
@@ -27,6 +29,10 @@ __all__ = [
 	"KnodMPNN",
 	"StrandLayer",
 	"GNNTrainer",
+	"GraphEvent",
+	"EventListener",
+	"SpecialistIndexEntry",
+	"Specialist",
 	"GraphLog",
 	"save_graph",
 	"load_graph",
@@ -40,4 +46,5 @@ __all__ = [
 	"load_all",
 	"save_knod",
 	"load_knod",
+	"read_knod_metadata",
 ]

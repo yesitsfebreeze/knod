@@ -190,10 +190,23 @@ def test_registry_knids():
 		reg.stores = {}
 		reg.knids = {}
 
-		# Register some stores
-		reg.register("turtles", "/fake/turtles.graph", "turtle knowledge")
-		reg.register("reptiles", "/fake/reptiles.graph", "reptile knowledge")
-		reg.register("marine", "/fake/marine.graph", "marine biology")
+		# Create actual .knod-compatible graph files so registry can read metadata
+		cfg = Config()
+		cfg.embedding_dim = 16
+		cfg.hidden_dim = 8
+		cfg.num_layers = 1
+		from py_knod.specialist.store import save_all as _save_all
+
+		for name, purpose in [("turtles", "turtle knowledge"), ("reptiles", "reptile knowledge"), ("marine", "marine biology")]:
+			g = Graph(name=name, purpose=purpose)
+			m = KnodMPNN(cfg)
+			s = StrandLayer(cfg.hidden_dim)
+			fpath = os.path.join(tmpdir, f"{name}.knod")
+			_save_all(g, m, s, Path(fpath).with_suffix(""))
+			# Directly populate stores (bypass file metadata read for unit test speed)
+			reg.stores[name] = {"path": fpath, "purpose": purpose}
+			# Also append to the file so persistence test works
+			reg._append(fpath)
 
 		# Create knids
 		reg.add_to_knid("biology", "turtles")
@@ -209,7 +222,7 @@ def test_registry_knids():
 		reg.remove_from_knid("biology", "turtles")
 		check("removed from knid", len(reg.stores_in_knid("biology")) == 1)
 
-		# Persistence
+		# Persistence — reload reads .knod metadata for names
 		reg2 = Registry.__new__(Registry)
 		reg2._path = Path(reg._path)
 		reg2.stores = {}

@@ -51,9 +51,7 @@ def _mcp(handler: Handler) -> FastMCP:
 	@mcp.tool()
 	def find_thoughts(query: str, k: int = 5) -> str:
 		"""Search for thoughts semantically similar to the query. Returns top-k matches without generating an LLM answer."""
-		emb = handler.provider.embed_text(query)
-		neighbors = handler.graph.find_thoughts(emb, k=k, threshold=handler.cfg.similarity_threshold)
-		results = [{"id": t.id, "text": t.text, "similarity": round(sim, 3), "source": t.source} for t, sim in neighbors]
+		results = handler.find_thoughts_by_query(query, k=k)
 		return json.dumps(results)
 
 	# ---- Resources ----
@@ -66,25 +64,17 @@ def _mcp(handler: Handler) -> FastMCP:
 	@mcp.resource("knod://graph")
 	def graph_info() -> str:
 		"""Graph metadata as JSON."""
-		return json.dumps(
-			{
-				"purpose": handler.graph.purpose,
-				"thought_count": handler.graph.num_thoughts,
-				"edge_count": handler.graph.num_edges,
-				"descriptors": handler.graph.descriptors,
-			}
-		)
+		return json.dumps(handler.graph_info)
 
 	@mcp.resource("knod://thoughts")
 	def list_thoughts() -> str:
 		"""List all thoughts as JSON array (id, text snippet, source)."""
-		thoughts = [{"id": t.id, "text": t.text[:200], "source": t.source} for t in handler.graph.thoughts.values()]
-		return json.dumps(thoughts)
+		return json.dumps(handler.all_thoughts)
 
 	@mcp.resource("knod://descriptors")
 	def list_descriptors() -> str:
 		"""List all descriptors as JSON."""
-		return json.dumps(handler.graph.descriptors)
+		return json.dumps(handler.graph_info["descriptors"])
 
 	# ---- Prompts ----
 

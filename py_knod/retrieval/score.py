@@ -14,17 +14,16 @@ import torch
 from ..config import Config
 from ..specialist.graph import Graph
 from ..specialist.gnn import KnodMPNN, StrandLayer
+from ..specialist.math import cosine
 
 log = logging.getLogger(__name__)
 
 
 def cosine_scores(query_emb: np.ndarray, graph: Graph) -> dict[int, float]:
 	"""Q_S2: Cosine similarity between query and every thought embedding."""
-	query_norm = query_emb / (np.linalg.norm(query_emb) + 1e-10)
 	scores = {}
 	for tid, t in graph.thoughts.items():
-		t_norm = t.embedding / (np.linalg.norm(t.embedding) + 1e-10)
-		scores[tid] = float(np.dot(query_norm, t_norm))
+		scores[tid] = cosine(query_emb, t.embedding)
 	return scores
 
 

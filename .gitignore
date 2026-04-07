@@ -11,3 +11,4 @@ archive/
 __pycache__/
 .ruff_cache/
 .timmy/
+.knod/

@@ -1,10 +1,21 @@
-"""OpenAI API wrapper — embed, decompose, link, answer."""
+"""OpenAI API wrapper — embed, decompose, link, answer.
+
+Uses the primary provider (OpenAI) for all calls.  When a chat completion
+hits a rate-limit, timeout, or connection error *and* a local fallback
+(Ollama) is configured, the request is retried against the fallback.
+Embeddings always use the primary provider to keep dimensions consistent.
+"""
 
 import json
+import logging
 import numpy as np
-from openai import OpenAI
+from openai import OpenAI, APIStatusError, APITimeoutError, APIConnectionError, RateLimitError
 
 from .config import Config
+
+log = logging.getLogger(__name__)
+
+_FALLBACK_ERRORS = (RateLimitError, APITimeoutError, APIConnectionError)
 
 
 class Provider:
@@ -13,6 +24,25 @@ class Provider:
 		self.embedding_model = cfg.embedding_model
 		self.chat_model = cfg.chat_model
 		self.embedding_dim = cfg.embedding_dim
+
+		# Fallback client (Ollama or other local provider)
+		if cfg.fallback_base_url:
+			self._fallback = OpenAI(api_key=cfg.fallback_api_key, base_url=cfg.fallback_base_url)
+			self._fallback_chat_model = cfg.fallback_chat_model or cfg.chat_model
+		else:
+			self._fallback = None
+			self._fallback_chat_model = ""
+
+	def _chat(self, **kwargs) -> "openai.types.chat.ChatCompletion":
+		"""Try primary client; fall back to local on rate-limit / timeout."""
+		try:
+			return self.client.chat.completions.create(**kwargs)
+		except _FALLBACK_ERRORS as exc:
+			if self._fallback is None:
+				raise
+			log.warning("Primary provider failed (%s), falling back to local", exc)
+			kwargs["model"] = self._fallback_chat_model
+			return self._fallback.chat.completions.create(**kwargs)
 
 	def embed_text(self, text: str) -> np.ndarray:
 		resp = self.client.embeddings.create(model=self.embedding_model, input=text)
@@ -37,7 +67,7 @@ class Provider:
 			hints = "\n".join(f"- {k}: {v}" for k, v in descriptors.items())
 			system += f"\n\nContext hints:\n{hints}"
 
-		resp = self.client.chat.completions.create(
+		resp = self._chat(
 			model=self.chat_model,
 			messages=[
 				{"role": "system", "content": system},
@@ -66,7 +96,7 @@ class Provider:
 			return []
 
 		numbered = "\n".join(f"{i}: {t}" for i, t in enumerate(candidate_texts))
-		resp = self.client.chat.completions.create(
+		resp = self._chat(
 			model=self.chat_model,
 			messages=[
 				{
@@ -92,7 +122,7 @@ class Provider:
 		]
 
 	def generate_answer(self, query: str, context: str) -> str:
-		resp = self.client.chat.completions.create(
+		resp = self._chat(
 			model=self.chat_model,
 			messages=[
 				{
@@ -110,7 +140,7 @@ class Provider:
 
 	def suggest_store(self, thought_texts: list[str]) -> tuple[str, str]:
 		combined = "\n".join(f"- {t}" for t in thought_texts[:20])
-		resp = self.client.chat.completions.create(
+		resp = self._chat(
 			model=self.chat_model,
 			messages=[
 				{

@@ -52,7 +52,7 @@ def http(handler: Handler) -> FastAPI:
 
 	@app.post("/ingest", response_model=IngestResponse)
 	def ingest(req: IngestRequest):
-		stats = handler.handle_ingest(req.text, req.source, req.descriptor)
+		stats = handler.ingest_sync(req.text, req.source, req.descriptor)
 		return IngestResponse(
 			thoughts_added=stats.get("committed", 0),
 			total_thoughts=stats["thoughts"],
@@ -61,17 +61,12 @@ def http(handler: Handler) -> FastAPI:
 
 	@app.post("/ask", response_model=AskResponse)
 	def ask(req: AskRequest):
-		answer, sources = handler.handle_ask(req.query)
+		answer, sources = handler.ask(req.query)
 		return AskResponse(answer=answer, sources=sources)
 
 	@app.get("/explore")
 	def explore():
-		return {
-			"purpose": handler.graph.purpose,
-			"thought_count": handler.graph.num_thoughts,
-			"edge_count": handler.graph.num_edges,
-			"descriptors": handler.graph.descriptors,
-		}
+		return handler.graph_info
 
 	@app.get("/health")
 	def health():
@@ -79,25 +74,25 @@ def http(handler: Handler) -> FastAPI:
 
 	@app.get("/status")
 	def status():
-		return {"status": handler.handle_status()}
+		return {"status": handler.status()}
 
 	@app.post("/purpose")
 	def set_purpose(req: PurposeRequest):
-		handler.handle_set_purpose(req.purpose)
-		return {"purpose": handler.graph.purpose}
+		handler.set_purpose(req.purpose)
+		return {"purpose": handler.graph_info["purpose"]}
 
 	@app.post("/descriptor/add")
 	def add_descriptor(req: DescriptorRequest):
-		handler.handle_descriptor_add(req.name, req.description)
-		return {"descriptors": handler.graph.descriptors}
+		handler.add_descriptor(req.name, req.description)
+		return {"descriptors": handler.graph_info["descriptors"]}
 
 	@app.post("/descriptor/remove")
 	def remove_descriptor(req: DescriptorRequest):
-		handler.handle_descriptor_remove(req.name)
-		return {"descriptors": handler.graph.descriptors}
+		handler.remove_descriptor(req.name)
+		return {"descriptors": handler.graph_info["descriptors"]}
 
 	@app.get("/descriptor/list")
 	def list_descriptors():
-		return {"descriptors": handler.graph.descriptors}
+		return {"descriptors": handler.graph_info["descriptors"]}
 
 	return app

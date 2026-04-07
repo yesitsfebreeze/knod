@@ -30,7 +30,7 @@ from .gnn import KnodMPNN, StrandLayer
 log = logging.getLogger(__name__)
 
 # --- .knod format constants ---
-KNOD_MAGIC = 0x6B6E6F64   # "knod"
+KNOD_MAGIC = 0x6B6E6F64  # "knod"
 KNOD_VERSION = 2
 
 SECTION_GRAPH = 0x01
@@ -57,43 +57,19 @@ class GraphLog:
 
 	def append_thought(self, thought: Thought):
 		"""Append a thought entry to the log."""
-		payload = pickle.dumps(
-			{
-				"id": thought.id,
-				"text": thought.text,
-				"embedding": thought.embedding,
-				"source": thought.source,
-				"created_at": thought.created_at,
-				"access_count": thought.access_count,
-				"last_accessed": thought.last_accessed,
-			}
-		)
+		d = thought.to_dict()
+		d["id"] = thought.id  # log entries need the id for replay
+		payload = pickle.dumps(d)
 		self._append(_LOG_THOUGHT, payload)
 
 	def append_edge(self, edge: Edge):
 		"""Append an edge entry to the log."""
-		payload = pickle.dumps(
-			{
-				"source_id": edge.source_id,
-				"target_id": edge.target_id,
-				"weight": edge.weight,
-				"reasoning": edge.reasoning,
-				"embedding": edge.embedding,
-				"created_at": edge.created_at,
-			}
-		)
+		payload = pickle.dumps(edge.to_dict())
 		self._append(_LOG_EDGE, payload)
 
 	def append_limbo(self, lt: LimboThought):
 		"""Append a limbo thought entry to the log."""
-		payload = pickle.dumps(
-			{
-				"text": lt.text,
-				"embedding": lt.embedding,
-				"source": lt.source,
-				"created_at": lt.created_at,
-			}
-		)
+		payload = pickle.dumps(lt.to_dict())
 		self._append(_LOG_LIMBO, payload)
 
 	def _append(self, entry_type: int, payload: bytes):
@@ -125,36 +101,12 @@ class GraphLog:
 				if entry_type == _LOG_THOUGHT:
 					tid = data["id"]
 					if tid not in graph.thoughts:
-						graph.thoughts[tid] = Thought(
-							id=tid,
-							text=data["text"],
-							embedding=data["embedding"],
-							source=data.get("source", ""),
-							created_at=data.get("created_at", 0),
-							access_count=data.get("access_count", 0),
-							last_accessed=data.get("last_accessed", 0.0),
-						)
+						graph.thoughts[tid] = Thought.from_dict(tid, data)
 						graph._next_id = max(graph._next_id, tid + 1)
 				elif entry_type == _LOG_EDGE:
-					graph.edges.append(
-						Edge(
-							source_id=data["source_id"],
-							target_id=data["target_id"],
-							weight=data["weight"],
-							reasoning=data["reasoning"],
-							embedding=data["embedding"],
-							created_at=data.get("created_at", 0),
-						)
-					)
+					graph.edges.append(Edge.from_dict(data))
 				elif entry_type == _LOG_LIMBO:
-					graph.limbo.append(
-						LimboThought(
-							text=data["text"],
-							embedding=data["embedding"],
-							source=data.get("source", ""),
-							created_at=data.get("created_at", 0),
-						)
-					)
+					graph.limbo.append(LimboThought.from_dict(data))
 
 	def clear(self):
 		"""Remove the log file (called after compaction)."""
@@ -172,6 +124,7 @@ def save_graph(graph: Graph, path: str | Path):
 	path.parent.mkdir(parents=True, exist_ok=True)
 
 	state = {
+		"name": graph.name,
 		"purpose": graph.purpose,
 		"descriptors": graph.descriptors,
 		"next_id": graph._next_id,
@@ -179,37 +132,9 @@ def save_graph(graph: Graph, path: str | Path):
 		"registry_nodes": graph._registry_nodes,
 		"max_thoughts": graph.max_thoughts,
 		"max_edges": graph.max_edges,
-		"thoughts": {
-			tid: {
-				"text": t.text,
-				"embedding": t.embedding,
-				"source": t.source,
-				"created_at": t.created_at,
-				"access_count": t.access_count,
-				"last_accessed": t.last_accessed,
-			}
-			for tid, t in graph.thoughts.items()
-		},
-		"edges": [
-			{
-				"source_id": e.source_id,
-				"target_id": e.target_id,
-				"weight": e.weight,
-				"reasoning": e.reasoning,
-				"embedding": e.embedding,
-				"created_at": e.created_at,
-			}
-			for e in graph.edges
-		],
-		"limbo": [
-			{
-				"text": lt.text,
-				"embedding": lt.embedding,
-				"source": lt.source,
-				"created_at": lt.created_at,
-			}
-			for lt in graph.limbo
-		],
+		"thoughts": {tid: t.to_dict() for tid, t in graph.thoughts.items()},
+		"edges": [e.to_dict() for e in graph.edges],
+		"limbo": [lt.to_dict() for lt in graph.limbo],
 	}
 	with open(path, "wb") as f:
 		pickle.dump(state, f)
@@ -222,7 +147,7 @@ def load_graph(path: str | Path) -> Graph:
 	with open(path, "rb") as f:
 		state = pickle.load(f)
 
-	graph = Graph(purpose=state["purpose"])
+	graph = Graph(name=state.get("name", ""), purpose=state["purpose"])
 	graph.descriptors = state.get("descriptors", {})
 	graph._next_id = state["next_id"]
 	graph._profile = state.get("profile")
@@ -232,37 +157,13 @@ def load_graph(path: str | Path) -> Graph:
 
 	for tid_str, tdata in state["thoughts"].items():
 		tid = int(tid_str) if isinstance(tid_str, str) else tid_str
-		graph.thoughts[tid] = Thought(
-			id=tid,
-			text=tdata["text"],
-			embedding=tdata["embedding"],
-			source=tdata.get("source", ""),
-			created_at=tdata.get("created_at", 0),
-			access_count=tdata.get("access_count", 0),
-			last_accessed=tdata.get("last_accessed", 0.0),
-		)
+		graph.thoughts[tid] = Thought.from_dict(tid, tdata)
 
 	for edata in state["edges"]:
-		graph.edges.append(
-			Edge(
-				source_id=edata["source_id"],
-				target_id=edata["target_id"],
-				weight=edata["weight"],
-				reasoning=edata["reasoning"],
-				embedding=edata["embedding"],
-				created_at=edata.get("created_at", 0),
-			)
-		)
+		graph.edges.append(Edge.from_dict(edata))
 
 	for ldata in state.get("limbo", []):
-		graph.limbo.append(
-			LimboThought(
-				text=ldata["text"],
-				embedding=ldata["embedding"],
-				source=ldata.get("source", ""),
-				created_at=ldata.get("created_at", 0),
-			)
-		)
+		graph.limbo.append(LimboThought.from_dict(ldata))
 
 	# Replay any append log entries written since last compaction
 	glog = GraphLog(path)
@@ -352,6 +253,7 @@ def load_all(cfg, base_path: str | Path) -> tuple[Graph, KnodMPNN, StrandLayer]:
 	graph_path = base.with_suffix(".graph")
 	if graph_path.exists():
 		graph = load_graph(graph_path)
+		graph.maturity_divisor = getattr(cfg, "maturity_divisor", 50)
 		model = KnodMPNN(cfg)
 		strand = StrandLayer(cfg.hidden_dim)
 		pt_path = base.with_suffix(".pt")
@@ -366,6 +268,7 @@ def load_all(cfg, base_path: str | Path) -> tuple[Graph, KnodMPNN, StrandLayer]:
 
 # --- .knod unified format ---
 
+
 def _write_section(f, tag: int, payload: bytes):
 	"""Write a tagged section: [tag:1][length:8][payload]."""
 	f.write(struct.pack("<B", tag))
@@ -373,37 +276,49 @@ def _write_section(f, tag: int, payload: bytes):
 	f.write(payload)
 
 
+def _parse_knod_sections(data: bytes) -> list[tuple[int, bytes]]:
+	"""Validate magic + version, then yield all (tag, payload) sections.
+
+	Raises ValueError if the file header is invalid.
+	"""
+	if len(data) < 8:
+		raise ValueError("File too small for .knod format")
+
+	magic = struct.unpack_from("<i", data, 0)[0]
+	if magic != KNOD_MAGIC:
+		raise ValueError(f"Bad magic: 0x{magic:08x}")
+
+	version = struct.unpack_from("<i", data, 4)[0]
+	if version != KNOD_VERSION:
+		raise ValueError(f"Unsupported .knod version {version}")
+
+	sections: list[tuple[int, bytes]] = []
+	off = 8
+	while off < len(data):
+		if off + 9 > len(data):
+			break
+		tag = data[off]
+		off += 1
+		length = struct.unpack_from("<q", data, off)[0]
+		off += 8
+		payload = data[off : off + length]
+		off += length
+		sections.append((tag, payload))
+	return sections
+
+
 def _graph_state(graph: Graph) -> dict:
 	"""Serialize graph to a state dict (no limbo — that's a separate section)."""
 	return {
+		"name": graph.name,
 		"purpose": graph.purpose,
 		"descriptors": graph.descriptors,
 		"next_id": graph._next_id,
 		"profile": graph._profile,
 		"max_thoughts": graph.max_thoughts,
 		"max_edges": graph.max_edges,
-		"thoughts": {
-			tid: {
-				"text": t.text,
-				"embedding": t.embedding,
-				"source": t.source,
-				"created_at": t.created_at,
-				"access_count": t.access_count,
-				"last_accessed": t.last_accessed,
-			}
-			for tid, t in graph.thoughts.items()
-		},
-		"edges": [
-			{
-				"source_id": e.source_id,
-				"target_id": e.target_id,
-				"weight": e.weight,
-				"reasoning": e.reasoning,
-				"embedding": e.embedding,
-				"created_at": e.created_at,
-			}
-			for e in graph.edges
-		],
+		"thoughts": {tid: t.to_dict() for tid, t in graph.thoughts.items()},
+		"edges": [e.to_dict() for e in graph.edges],
 	}
 
 
@@ -432,10 +347,7 @@ def save_knod(graph: Graph, model: KnodMPNN, strand: StrandLayer, path: str | Pa
 
 		# LIMBO section (only if non-empty)
 		if graph.limbo:
-			limbo_data = [
-				{"text": lt.text, "embedding": lt.embedding, "source": lt.source, "created_at": lt.created_at}
-				for lt in graph.limbo
-			]
+			limbo_data = [lt.to_dict() for lt in graph.limbo]
 			_write_section(f, SECTION_LIMBO, pickle.dumps(limbo_data))
 
 		# REGISTRY section (only if non-empty)
@@ -453,35 +365,15 @@ def load_knod(cfg, path: str | Path) -> tuple[Graph, KnodMPNN, StrandLayer]:
 	with open(path, "rb") as f:
 		data = f.read()
 
-	if len(data) < 8:
-		raise ValueError(f"File too small: {path}")
+	# Parse sections — validates magic + version
+	sections = _parse_knod_sections(data)
 
-	magic = struct.unpack_from("<i", data, 0)[0]
-	version = struct.unpack_from("<i", data, 4)[0]
-
-	if magic != KNOD_MAGIC:
-		raise ValueError(f"Bad magic in {path}: 0x{magic:08x}")
-
-	if version != KNOD_VERSION:
-		raise ValueError(f"Unsupported .knod version {version} in {path}")
-
-	# Parse sections
 	graph_state = None
 	model_bytes = None
 	limbo_data = None
 	registry_nodes = None
 
-	off = 8
-	while off < len(data):
-		if off + 9 > len(data):
-			break
-		tag = data[off]
-		off += 1
-		length = struct.unpack_from("<q", data, off)[0]
-		off += 8
-		payload = data[off : off + length]
-		off += length
-
+	for tag, payload in sections:
 		if tag == SECTION_GRAPH:
 			graph_state = pickle.loads(payload)
 		elif tag == SECTION_MODEL:
@@ -496,47 +388,24 @@ def load_knod(cfg, path: str | Path) -> tuple[Graph, KnodMPNN, StrandLayer]:
 		raise ValueError(f"No GRAPH section in {path}")
 
 	# Reconstruct graph
-	graph = Graph(purpose=graph_state["purpose"])
+	graph = Graph(name=graph_state.get("name", ""), purpose=graph_state["purpose"])
 	graph.descriptors = graph_state.get("descriptors", {})
 	graph._next_id = graph_state["next_id"]
 	graph._profile = graph_state.get("profile")
 	graph.max_thoughts = graph_state.get("max_thoughts", 0)
 	graph.max_edges = graph_state.get("max_edges", 0)
+	graph.maturity_divisor = getattr(cfg, "maturity_divisor", 50)
 
 	for tid_str, tdata in graph_state["thoughts"].items():
 		tid = int(tid_str) if isinstance(tid_str, str) else tid_str
-		graph.thoughts[tid] = Thought(
-			id=tid,
-			text=tdata["text"],
-			embedding=tdata["embedding"],
-			source=tdata.get("source", ""),
-			created_at=tdata.get("created_at", 0),
-			access_count=tdata.get("access_count", 0),
-			last_accessed=tdata.get("last_accessed", 0.0),
-		)
+		graph.thoughts[tid] = Thought.from_dict(tid, tdata)
 
 	for edata in graph_state["edges"]:
-		graph.edges.append(
-			Edge(
-				source_id=edata["source_id"],
-				target_id=edata["target_id"],
-				weight=edata["weight"],
-				reasoning=edata["reasoning"],
-				embedding=edata["embedding"],
-				created_at=edata.get("created_at", 0),
-			)
-		)
+		graph.edges.append(Edge.from_dict(edata))
 
 	if limbo_data:
 		for ldata in limbo_data:
-			graph.limbo.append(
-				LimboThought(
-					text=ldata["text"],
-					embedding=ldata["embedding"],
-					source=ldata.get("source", ""),
-					created_at=ldata.get("created_at", 0),
-				)
-			)
+			graph.limbo.append(LimboThought.from_dict(ldata))
 
 	if registry_nodes:
 		graph._registry_nodes = registry_nodes
@@ -554,3 +423,31 @@ def load_knod(cfg, path: str | Path) -> tuple[Graph, KnodMPNN, StrandLayer]:
 		load_base_model(model)
 
 	return graph, model, strand
+
+
+def read_knod_metadata(path: str | Path) -> dict:
+	"""Read only the GRAPH section metadata from a .knod file (no model load).
+
+	Returns a dict with keys: purpose, descriptors, profile, num_thoughts, num_edges.
+	Raises ValueError if the file is invalid or has no GRAPH section.
+	"""
+	path = Path(path)
+	with open(path, "rb") as f:
+		data = f.read()
+
+	# Parse sections — validates magic + version (fixes missing version check)
+	sections = _parse_knod_sections(data)
+
+	for tag, payload in sections:
+		if tag == SECTION_GRAPH:
+			state = pickle.loads(payload)
+			return {
+				"name": state.get("name", ""),
+				"purpose": state.get("purpose", ""),
+				"descriptors": state.get("descriptors", {}),
+				"profile": state.get("profile"),
+				"num_thoughts": len(state.get("thoughts", {})),
+				"num_edges": len(state.get("edges", [])),
+			}
+
+	raise ValueError(f"No GRAPH section in {path}")

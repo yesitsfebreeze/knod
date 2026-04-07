@@ -3,6 +3,8 @@
 import logging
 import threading
 import time as _time
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from pathlib import Path
 from queue import Queue, Full
 
@@ -19,14 +21,56 @@ from .specialist import (
 	save_all,
 	load_all,
 	load_base_model,
+	read_knod_metadata,
 )
+from .specialist.math import cosine
 from .ingest import Ingester
 from .limbo import find_clusters, promote_cluster
-from .retrieval import cosine_scores, edge_scores, gnn_scores, merge, deduplicate, answer, synthesize_direct
+from .retrieval import (
+	cosine_scores,
+	edge_scores,
+	gnn_scores,
+	merge,
+	deduplicate,
+	best_chains_from,
+	rate_thoughts,
+	expand,
+	PathChain,
+	answer,
+	synthesize_direct,
+)
 
 log = logging.getLogger(__name__)
 
 QUEUE_CAPACITY = 128
+
+# --- Event bus types ---
+
+
+@dataclass(frozen=True)
+class GraphEvent:
+	"""Typed event fired after significant state changes."""
+
+	kind: str  # "ingest_complete" | "limbo_promoted" | "status_changed"
+	thoughts: int
+	edges: int
+	committed: int  # number newly committed (0 for non-ingest events)
+	detail: dict = field(default_factory=dict)
+
+
+EventListener = Callable[[GraphEvent], None]
+
+
+@dataclass
+class SpecialistIndexEntry:
+	"""Lightweight metadata for one specialist, built on startup."""
+
+	name: str
+	purpose: str
+	descriptors: dict[str, str]
+	profile: np.ndarray | None
+	num_thoughts: int
+	num_edges: int
 
 
 class Specialist:
@@ -53,29 +97,30 @@ class Handler:
 		self.trainer: GNNTrainer | None = None
 		self.ingester: Ingester | None = None
 		self._specialists: dict[str, Specialist] = {}
+		self._index: dict[str, SpecialistIndexEntry] = {}  # specialist name → index entry
 		self.mu = threading.Lock()
 		self._queue: Queue | None = None
 		self._queue_worker: threading.Thread | None = None
 		self._limbo_thread: threading.Thread | None = None
 		self._shutdown = threading.Event()
 		self._in_flight = threading.Event()  # set while an ingest is running
-		self._subs: list = []
-		self._subs_lock = threading.Lock()
+		# Event bus — replaces raw-socket pub/sub
+		self._listeners: dict[str, list[EventListener]] = {}
+		self._listeners_lock = threading.Lock()
 
 	def init(self):
 		base = Path(self.cfg.graph_path).with_suffix("")
-		base.parent.mkdir(parents=True, exist_ok=True)
-		knod_file = base.with_suffix(".knod")
 		graph_file = base.with_suffix(".graph")
 
-		if knod_file.exists() or graph_file.exists():
-			log.info("Loading existing graph from %s", knod_file if knod_file.exists() else graph_file)
+		if graph_file.exists():
+			log.info("Loading existing graph from %s", graph_file)
 			self.graph, self.model, self.strand = load_all(self.cfg, base)
 		else:
 			log.info("Creating new graph")
 			self.graph = Graph(
 				max_thoughts=self.cfg.max_thoughts,
 				max_edges=self.cfg.max_edges,
+				maturity_divisor=self.cfg.maturity_divisor,
 			)
 			self.model = KnodMPNN(self.cfg)
 			self.strand = StrandLayer(self.cfg.hidden_dim)
@@ -91,17 +136,15 @@ class Handler:
 		self._queue_worker = threading.Thread(target=self._queue_loop, daemon=True)
 		self._queue_worker.start()
 
-		# Limbo scan fires reactively after each ingest (no periodic timer)
-		self._limbo_lock = threading.Lock()  # guards against overlapping scans
+		# Start limbo background scan
+		self._limbo_thread = threading.Thread(target=self._limbo_scan_loop, daemon=True)
+		self._limbo_thread.start()
 
 	def save(self):
 		base = Path(self.cfg.graph_path).with_suffix("")
 		save_all(self.graph, self.model, self.strand, base)
 
 	def shutdown(self):
-		# Wait for any in-flight limbo scan to finish before shutting down
-		self._limbo_lock.acquire()
-		self._limbo_lock.release()
 		self._shutdown.set()
 		if self._queue is not None:
 			self._queue.put(None)  # sentinel
@@ -148,12 +191,17 @@ class Handler:
 				loss = self.trainer.train_on_graph(self.graph)
 				log.info("GNN training loss: %.4f", loss)
 			self.save()
-		self._push_event(self.handle_status())
-		# Fire limbo scan in background after each ingest
-		self._trigger_limbo_scan()
+		self._fire_event(
+			GraphEvent(
+				kind="ingest_complete",
+				thoughts=self.graph.num_thoughts,
+				edges=self.graph.num_edges,
+				committed=n_committed,
+			)
+		)
 		return n_committed
 
-	def handle_ingest(self, text: str, source: str = "", descriptor: str = "") -> dict:
+	def ingest_sync(self, text: str, source: str = "", descriptor: str = "") -> dict:
 		"""Ingest synchronously. Returns stats dict."""
 		n_committed = self._ingest_sync(text, source, descriptor)
 		return {
@@ -162,50 +210,59 @@ class Handler:
 			"edges": self.graph.num_edges,
 		}
 
-	def handle_ingest_queued(self, text: str, source: str = "", descriptor: str = "") -> str:
+	def ingest(self, text: str, source: str = "", descriptor: str = "") -> str:
 		"""Try async queue, fallback to sync. Returns status string."""
 		queued, pending = self.enqueue(text, source, descriptor)
 		if queued:
 			return f"queued ({pending} pending)"
 		# fallback to sync
-		self.handle_ingest(text, source, descriptor)
+		self.ingest_sync(text, source, descriptor)
 		return "ok"
 
-	def handle_ask(self, query: str) -> tuple[str, list[dict]]:
-		"""Fan-out query to relevant specialists, merge signals, generate answer."""
+	def ask(self, query: str) -> tuple[str, list[dict]]:
+		"""Three-stage retrieval: score + expand → deduplicate → rate → answer.
+
+		Stage 1 — Score & expand: merge scoring signals + Dijkstra path traversal.
+		Stage 2 — Deduplicate across specialists.
+		Stage 3 — Rate: re-rank by direct query relevance.
+		Stage 4 — Answer: path-aware context assembly + LLM generation.
+		"""
 		query_emb = self.provider.embed_text(query)
 
-		# Score against the default graph (always included)
-		local_scored = self._score_specialist(query_emb, self.graph, self.model, self.strand)
+		# Always include the default graph
+		local_scored, local_chains = self._score_specialist(query_emb, self.graph, self.model, self.strand)
 
-		# Profile-based routing: only query specialists with similar profiles
+		# Query every specialist
 		all_scored = [local_scored]
-		q_norm = query_emb / (np.linalg.norm(query_emb) + 1e-10)
+		all_chains: list[PathChain] = list(local_chains)
 		for name, spec in self._specialists.items():
-			if spec.graph.profile is None:
-				continue
-			p_norm = spec.graph.profile / (np.linalg.norm(spec.graph.profile) + 1e-10)
-			sim = float(np.dot(p_norm, q_norm))
-			if sim < self.cfg.query_routing_threshold:
-				log.debug("Skipping specialist '%s' (sim=%.3f)", name, sim)
-				continue
+			if spec.graph.profile is not None:
+				sim = cosine(spec.graph.profile, query_emb)
+				log.debug("Specialist '%s' profile sim=%.3f", name, sim)
 			try:
-				all_scored.append(self._score_specialist(query_emb, spec.graph, spec.model, spec.strand))
+				spec_scored, spec_chains = self._score_specialist(query_emb, spec.graph, spec.model, spec.strand)
+				all_scored.append(spec_scored)
+				all_chains.extend(spec_chains)
 			except Exception:
 				log.warning("Specialist '%s' query failed", name, exc_info=True)
 
-		# Q_DED: deduplicate across specialists
+		# Deduplicate across specialists
 		scored = deduplicate(all_scored, self.cfg.top_k)
 		if not scored:
 			return "No relevant knowledge found.", []
 
+		# Stage 3: Rate — re-rank thoughts by direct query relevance
+		scored = rate_thoughts(query_emb, scored)
+
+		# Filter chains to only those whose terminal thought survived scoring
+		relevant_chains = best_chains_from(all_chains, scored)
+
 		top_score = scored[0][1]
 		if top_score >= self.cfg.confidence_threshold:
-			log.info("Confidence gate: top_score=%.3f >= %.3f, skipping LLM",
-				top_score, self.cfg.confidence_threshold)
+			log.info("Confidence gate: top_score=%.3f >= %.3f, skipping LLM", top_score, self.cfg.confidence_threshold)
 			return synthesize_direct(scored)
 
-		text, sources = answer(query, scored, self.provider)
+		text, sources = answer(query, scored, self.provider, chains=relevant_chains or None)
 
 		# Ingest the LLM answer back into the graph so future similar queries
 		# can be answered directly — the learning flywheel.
@@ -213,28 +270,26 @@ class Handler:
 
 		return text, sources
 
-	def _score_specialist(
-		self,
-		query_emb,
-		graph: Graph,
-		model: KnodMPNN,
-		strand: StrandLayer,
-	) -> list[tuple]:
-		"""Run all three scoring signals + merge for one specialist."""
-		if not graph.thoughts:
-			return []
+	def find_thoughts_by_query(self, query: str, k: int = 5) -> list[dict]:
+		"""Embed query and search for semantically similar thoughts across all specialists."""
+		emb = self.provider.embed_text(query)
+		# Search global graph
+		all_neighbors: list[tuple] = list(self.graph.find_thoughts(emb, k=k, threshold=self.cfg.similarity_threshold))
+		# Search every specialist
+		for spec in self._specialists.values():
+			all_neighbors.extend(spec.graph.find_thoughts(emb, k=k, threshold=self.cfg.similarity_threshold))
+		# Sort by similarity descending, deduplicate by text, return top-k
+		seen: set[str] = set()
+		results = []
+		for t, sim in sorted(all_neighbors, key=lambda x: x[1], reverse=True):
+			if t.text not in seen:
+				seen.add(t.text)
+				results.append({"id": t.id, "text": t.text, "similarity": round(sim, 3), "source": t.source})
+			if len(results) >= k:
+				break
+		return results
 
-		cos = cosine_scores(query_emb, graph)
-		try:
-			gnn = gnn_scores(query_emb, graph, model, strand)
-		except Exception:
-			log.debug("GNN scoring failed", exc_info=True)
-			gnn = {}
-		edg = edge_scores(query_emb, graph, self.cfg)
-
-		return merge(cos, gnn, edg, graph, self.cfg)
-
-	def handle_status(self) -> str:
+	def status(self) -> str:
 		queued = self._queue.qsize() if self._queue else 0
 		in_flight = 1 if self._in_flight.is_set() else 0
 		return (
@@ -246,42 +301,139 @@ class Handler:
 			f"purpose={self.graph.purpose or '(none)'}"
 		)
 
-	def handle_set_purpose(self, purpose: str):
+	def set_purpose(self, purpose: str):
 		self.graph.purpose = purpose
 		self.save()
 
-	def handle_descriptor_add(self, name: str, text: str):
+	def add_descriptor(self, name: str, text: str):
 		self.graph.descriptors[name] = text
 		self.save()
 
-	def handle_descriptor_remove(self, name: str) -> bool:
+	def remove_descriptor(self, name: str) -> bool:
 		removed = self.graph.descriptors.pop(name, None) is not None
 		if removed:
 			self.save()
 		return removed
 
-	# ---- pub/sub for TCP subscribers ----
+	def resolve_descriptor(self, name: str) -> str:
+		"""Resolve a descriptor name to its text. Returns '' if not found."""
+		return self.graph.descriptors.get(name, "")
 
-	def subscribe(self, sock):
-		with self._subs_lock:
-			self._subs.append(sock)
+	def ingest_into_specialist(
+		self,
+		specialist_name: str,
+		text: str,
+		source: str = "",
+		descriptor: str = "",
+	) -> int:
+		"""Ingest text directly into a named specialist graph. Returns number committed."""
+		spec = self._specialists.get(specialist_name)
+		if spec is None:
+			raise KeyError(f"Specialist '{specialist_name}' not loaded")
+		ingester = Ingester(spec.graph, self.provider, self.cfg)
+		committed = ingester.ingest(text, source=source, descriptor=descriptor)
+		return len(committed)
 
-	def unsubscribe(self, sock):
-		with self._subs_lock:
-			self._subs = [s for s in self._subs if s is not sock]
+	def ask_knid(self, query: str, knid: str) -> tuple[str, list[dict]]:
+		"""Ask scoped to all specialists in a knid group."""
+		store_names = self.registry.stores_in_knid(knid)
+		query_emb = self.provider.embed_text(query)
+		all_scored = []
+		all_chains: list[PathChain] = []
+		for sname in store_names:
+			spec = self._specialists.get(sname)
+			if spec is None:
+				continue
+			spec_scored, spec_chains = self._score_specialist(query_emb, spec.graph, spec.model, spec.strand)
+			all_scored.append(spec_scored)
+			all_chains.extend(spec_chains)
+		scored = deduplicate(all_scored, self.cfg.top_k)
+		if not scored:
+			return "No relevant knowledge found in knid.", []
 
-	def _push_event(self, msg: str):
-		with self._subs_lock:
-			dead = []
-			for sock in self._subs:
-				try:
-					data = msg.encode()
-					hdr = len(data).to_bytes(4, "big")
-					sock.sendall(hdr + data)
-				except Exception:
-					dead.append(sock)
-			for s in dead:
-				self._subs.remove(s)
+		# Rate — re-rank thoughts by direct query relevance (parity with ask())
+		scored = rate_thoughts(query_emb, scored)
+
+		# Filter chains to only those whose terminal thought survived scoring
+		relevant_chains = best_chains_from(all_chains, scored)
+
+		return answer(query, scored, self.provider, chains=relevant_chains or None)
+		return answer(query, scored, self.provider)
+
+	def ingested_sources(self) -> set[str]:
+		"""Return the set of all source strings already in the graph and all specialists."""
+		sources: set[str] = set()
+		for t in self.graph.thoughts.values():
+			sources.add(t.source)
+		for spec in self._specialists.values():
+			for t in spec.graph.thoughts.values():
+				sources.add(t.source)
+		return sources
+
+	@property
+	def graph_info(self) -> dict:
+		"""Read-only snapshot of graph metadata. No internal objects exposed."""
+		return {
+			"purpose": self.graph.purpose,
+			"thought_count": self.graph.num_thoughts,
+			"edge_count": self.graph.num_edges,
+			"maturity": self.graph.maturity,
+			"descriptors": dict(self.graph.descriptors),
+		}
+
+	@property
+	def all_thoughts(self) -> list[dict]:
+		"""Snapshot of all thoughts as lightweight dicts."""
+		return [{"id": t.id, "text": t.text[:200], "source": t.source} for t in self.graph.thoughts.values()]
+
+	# ---- event bus (replaces raw-socket pub/sub) ----
+
+	def on(self, event: str, listener: EventListener) -> "Handler":
+		"""Register an event listener. event: 'ingest_complete' | 'limbo_promoted' | '*'"""
+		with self._listeners_lock:
+			self._listeners.setdefault(event, []).append(listener)
+		return self
+
+	def off(self, event: str, listener: EventListener) -> None:
+		"""Deregister an event listener."""
+		with self._listeners_lock:
+			bucket = self._listeners.get(event, [])
+			self._listeners[event] = [l for l in bucket if l is not listener]
+
+	def _fire_event(self, event: GraphEvent) -> None:
+		with self._listeners_lock:
+			specific = list(self._listeners.get(event.kind, []))
+			wildcard = list(self._listeners.get("*", []))
+		for listener in specific + wildcard:
+			try:
+				listener(event)
+			except Exception:
+				log.exception("Event listener raised for kind=%s", event.kind)
+
+	# ---- backward-compatibility shims (deprecated) ----
+	# These delegate to the new names so existing call sites keep working
+	# while we migrate callers. Remove once all callers are updated.
+
+	def handle_ingest(self, text: str, source: str = "", descriptor: str = "") -> dict:
+		return self.ingest_sync(text, source, descriptor)
+
+	def handle_ingest_queued(self, text: str, source: str = "", descriptor: str = "") -> str:
+		return self.ingest(text, source, descriptor)
+
+	def handle_ask(self, query: str) -> tuple[str, list[dict]]:
+		return self.ask(query)
+
+	def handle_status(self) -> str:
+		return self.status()
+
+	def handle_set_purpose(self, purpose: str):
+		return self.set_purpose(purpose)
+
+	def handle_descriptor_add(self, name: str, text: str):
+		return self.add_descriptor(name, text)
+
+	def handle_descriptor_remove(self, name: str) -> bool:
+		return self.remove_descriptor(name)
 
 	# ---- specialist management ----
 
@@ -309,9 +461,7 @@ class Handler:
 			if t is None:
 				return
 			self.graph._registry_nodes[name] = t.id
-			neighbors = self.graph.find_thoughts(
-				profile, k=self.cfg.top_k, threshold=self.cfg.similarity_threshold
-			)
+			neighbors = self.graph.find_thoughts(profile, k=self.cfg.top_k, threshold=self.cfg.similarity_threshold)
 			for neighbor, sim in neighbors:
 				if neighbor.id != t.id:
 					self.graph.add_edge(
@@ -323,50 +473,98 @@ class Handler:
 					)
 
 	def _load_specialists(self):
-		"""Load all registered specialists into cache and upsert registry nodes."""
+		"""Load all registered specialists into cache, build index, and upsert registry nodes."""
 		for name, entry in self.registry.stores.items():
 			try:
-				base = Path(entry["path"]).with_suffix("")
-				# load_all prefers .knod, falls back to legacy .graph+.pt
+				graph_path = entry["path"]
+				if not Path(graph_path).exists():
+					log.warning("Specialist '%s' graph not found: %s", name, graph_path)
+					continue
+				base = Path(graph_path).with_suffix("")
 				graph, model, strand = load_all(self.cfg, base)
 				self._specialists[name] = Specialist(
 					name=name,
-					purpose=entry.get("purpose", ""),
+					purpose=entry.get("purpose", "") or graph.purpose,
 					graph=graph,
 					model=model,
 					strand=strand,
 				)
-				log.info("Loaded specialist '%s'", name)
+				# Build index entry from loaded graph metadata
+				self._index[name] = SpecialistIndexEntry(
+					name=name,
+					purpose=graph.purpose,
+					descriptors=dict(graph.descriptors),
+					profile=graph.profile.copy() if graph.profile is not None else None,
+					num_thoughts=graph.num_thoughts,
+					num_edges=graph.num_edges,
+				)
+				log.info("Loaded specialist '%s' (%d thoughts, %d edges)", name, graph.num_thoughts, graph.num_edges)
 			except Exception:
 				log.warning("Failed to load specialist '%s'", name, exc_info=True)
+
+		log.info("Specialist index: %d entries loaded", len(self._index))
 
 		# Upsert registry nodes so the global graph knows about all specialists
 		for name, spec in self._specialists.items():
 			self._upsert_specialist_node(name, spec)
 
+	def _score_specialist(
+		self,
+		query_emb,
+		graph: Graph,
+		model: KnodMPNN,
+		strand: StrandLayer,
+	) -> tuple[list[tuple], list[PathChain]]:
+		"""Run all three scoring signals + merge + expand for one specialist.
+
+		Returns (scored_thoughts, path_chains).
+
+		Pass 1: standard merge → seed thoughts (direct high-scoring matches).
+		Pass 2: scan all thoughts at a relaxed cosine floor to find distant
+		         targets that didn't survive merge threshold.
+		Then expand() does Dijkstra path traversal from seeds towards targets.
+		"""
+		if not graph.thoughts:
+			return [], []
+
+		cos = cosine_scores(query_emb, graph)
+		try:
+			gnn = gnn_scores(query_emb, graph, model, strand)
+		except Exception:
+			log.debug("GNN scoring failed", exc_info=True)
+			gnn = {}
+		edg = edge_scores(query_emb, graph, self.cfg)
+
+		seeds = merge(cos, gnn, edg, graph, self.cfg)
+		if not seeds:
+			return [], []
+
+		# Pass 2: find distant targets — thoughts with decent cosine that
+		# didn't make it through merge.  These become Dijkstra endpoints.
+		seed_ids = {t.id for t, _ in seeds}
+		distant_floor = max(self.cfg.similarity_threshold * 0.6, 0.15)
+		targets: set[int] = set()
+		for tid, sim in cos.items():
+			if tid not in seed_ids and sim >= distant_floor:
+				targets.add(tid)
+
+		scored, chains = expand(seeds, query_emb, graph, self.cfg, targets=targets or None)
+		return scored, chains
+
 	# ---- limbo background scan ----
 
-	def _trigger_limbo_scan(self):
-		"""Fire a limbo scan on a background thread. Non-blocking, skips if already running."""
-		if self._shutdown.is_set():
-			return
-		if len(self.graph.limbo) < self.cfg.limbo_cluster_min:
-			return
-		thread = threading.Thread(target=self._limbo_scan_async, daemon=True)
-		thread.start()
-
-	def _limbo_scan_async(self):
-		"""Run limbo scan in background. Skips if another scan is already in progress."""
-		if not self._limbo_lock.acquire(blocking=False):
-			return  # another scan already running
-		try:
-			with self.mu:
-				self._scan_limbo()
-				self.save()
-		except Exception:
-			log.exception("Limbo scan failed")
-		finally:
-			self._limbo_lock.release()
+	def _limbo_scan_loop(self):
+		"""Background: scan limbo every cfg.limbo_scan_interval seconds."""
+		while not self._shutdown.is_set():
+			self._shutdown.wait(self.cfg.limbo_scan_interval)
+			if self._shutdown.is_set():
+				break
+			try:
+				with self.mu:
+					self._scan_limbo()
+					self.save()
+			except Exception:
+				log.exception("Limbo scan failed")
 
 	def _scan_limbo(self):
 		"""Find clusters in limbo and promote them."""
@@ -400,3 +598,12 @@ class Handler:
 		for spec_name in modified_specialists:
 			if spec_name in self._specialists:
 				self._upsert_specialist_node(spec_name, self._specialists[spec_name])
+			self._fire_event(
+				GraphEvent(
+					kind="limbo_promoted",
+					thoughts=self.graph.num_thoughts,
+					edges=self.graph.num_edges,
+					committed=0,
+					detail={"specialist": spec_name},
+				)
+			)

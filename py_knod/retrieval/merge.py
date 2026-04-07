@@ -1,10 +1,10 @@
 """Retrieval · Merge — adaptive weighting, access boost, deduplication.
 
 Matches FLOW.md Q_MERGE:
-  Q_WGT — Adaptive weighting:
-             GNN+edges:  0.4·cos + 0.4·gnn + 0.2·edge
-             GNN only:   0.5·cos + 0.5·gnn
-             Cosine only: cos
+  Q_WGT — Adaptive weighting (boost-only):
+             blended = 0.4·cos + 0.4·gnn + 0.2·edge  (or fewer signals)
+             score   = max(cos, blended)
+             GNN/edge signals can only boost, never penalise.
   Q_BST — Access boost: +log1p·0.02 freq  +0.05·exp recency
   Q_THR — Adaptive threshold: scale between floor (0.2) and configured max
              based on graph maturity and query-level match quality
@@ -18,6 +18,19 @@ from ..config import Config
 from ..specialist.graph import Graph, Thought
 
 SIMILARITY_FLOOR = 0.2
+
+# Sources excluded from retrieval — LLM-synthesized non-answers ingested via
+# the learning flywheel that pollute rankings with low-information content.
+_EXCLUDED_SOURCES = {"query_response"}
+
+# Source prefix excluded from retrieval — registry nodes added to the global
+# graph to represent specialists.  They are structural routing metadata, not
+# knowledge content, and should never appear in answers.
+_EXCLUDED_PREFIX = "specialist:"
+
+
+def _is_excluded(source: str) -> bool:
+	return source in _EXCLUDED_SOURCES or source.startswith(_EXCLUDED_PREFIX)
 
 
 def _effective_threshold(cos: dict[int, float], graph: Graph, cfg: Config) -> float:
@@ -50,7 +63,13 @@ def merge(
 	graph: Graph,
 	cfg: Config,
 ) -> list[tuple[Thought, float]]:
-	"""Combine cosine / GNN / edge signals, apply access boost, filter by threshold."""
+	"""Combine cosine / GNN / edge signals, apply access boost, filter by threshold.
+
+	Returns up to cfg.top_k * 3 candidates per specialist so that deduplicate()
+	can make a fair global selection across all specialists.  Returning only
+	top_k per specialist would let a large specialist with many mediocre-but-
+	passing thoughts crowd out a small specialist with a few highly relevant ones.
+	"""
 	now = _time.time()
 	has_gnn = bool(gnn)
 	has_edges = bool(edg)
@@ -66,14 +85,19 @@ def merge(
 		e = edg.get(tid, 0.0)
 
 		# Q_WGT — adaptive weighting
+		# GNN / edge signals can only *boost* a thought's score, never drag
+		# it below cosine.  This prevents newly-ingested thoughts with strong
+		# semantic relevance from being penalised by uninformative GNN/edge
+		# scores, while still rewarding well-connected thoughts.
 		if has_gnn and has_edges:
-			score = 0.4 * c + 0.4 * g + 0.2 * e
+			blended = 0.4 * c + 0.4 * g + 0.2 * e
 		elif has_gnn:
-			score = 0.5 * c + 0.5 * g
+			blended = 0.5 * c + 0.5 * g
 		elif has_edges:
-			score = 0.7 * c + 0.3 * e
+			blended = 0.7 * c + 0.3 * e
 		else:
-			score = c
+			blended = c
+		score = max(c, blended)
 
 		# Q_BST — access boost
 		t = graph.thoughts[tid]
@@ -85,10 +109,12 @@ def merge(
 		score += min(freq_boost + recency_boost, 0.1)
 
 		if score >= threshold:
-			combined.append((t, score))
+			if not _is_excluded(t.source):
+				combined.append((t, score))
 
 	combined.sort(key=lambda x: x[1], reverse=True)
-	return combined[: cfg.top_k]
+	# Return a generous candidate set — deduplicate() does the final top_k cut
+	return combined[: cfg.top_k * 3]
 
 
 def deduplicate(scored_lists: list[list[tuple[Thought, float]]], top_k: int) -> list[tuple[Thought, float]]:
@@ -99,3 +125,23 @@ def deduplicate(scored_lists: list[list[tuple[Thought, float]]], top_k: int) -> 
 			if thought.text not in seen or score > seen[thought.text][1]:
 				seen[thought.text] = (thought, score)
 	return sorted(seen.values(), key=lambda x: x[1], reverse=True)[:top_k]
+
+
+def best_chains_from(
+	all_chains: list,
+	scored: list[tuple[Thought, float]],
+) -> list:
+	"""Filter chains to those whose terminal thought survived scoring.
+
+	For each surviving terminal thought, keeps only the highest-scoring chain.
+	Returns chains sorted by score descending.
+	"""
+	scored_ids = {t.id for t, _ in scored}
+	relevant: list = []
+	seen_terminals: set[int] = set()
+	for chain in sorted(all_chains, key=lambda c: c.score, reverse=True):
+		tid = chain.terminal.id if chain.terminal else None
+		if tid and tid in scored_ids and tid not in seen_terminals:
+			seen_terminals.add(tid)
+			relevant.append(chain)
+	return relevant

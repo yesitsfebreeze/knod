@@ -76,6 +76,9 @@ def main():
 	knid_list_cmd = knid_sub.add_parser("list", help="List knids or stores in a knid")
 	knid_list_cmd.add_argument("name", type=str, nargs="?", default=None)
 
+	# migrate — rename store files to SHA-256 hashed names
+	sub.add_parser("migrate", help="Rename store files to SHA-256 hashed names")
+
 	args = parser.parse_args()
 
 	logging.basicConfig(
@@ -120,6 +123,9 @@ def main():
 
 	elif args.command == "knid":
 		_do_knid(cfg, args)
+
+	elif args.command == "migrate":
+		_do_migrate()
 
 	else:
 		parser.print_help()
@@ -225,15 +231,13 @@ def _do_ingest_file(cfg: Config, filepath: str, descriptor: str = "", knid: str 
 			handler.shutdown()
 			return
 		for sname in store_names:
-			if sname in handler._specialists:
-				spec = handler._specialists[sname]
-				from .ingest import Ingester
-
-				ingester = Ingester(spec.graph, handler.provider, cfg)
-				committed = ingester.ingest(text, source=Path(filepath).stem, descriptor=descriptor)
-				print(f"  {sname}: {len(committed)} thoughts committed")
+			try:
+				n = handler.ingest_into_specialist(sname, text, source=Path(filepath).stem, descriptor=descriptor)
+				print(f"  {sname}: {n} thoughts committed")
+			except KeyError:
+				print(f"  {sname}: not loaded, skipping")
 	else:
-		stats = handler.handle_ingest(text, source=Path(filepath).stem, descriptor=descriptor)
+		stats = handler.ingest_sync(text, source=Path(filepath).stem, descriptor=descriptor)
 		print(f"Ingested from {filepath}")
 		print(f"Graph: {stats['thoughts']} thoughts, {stats['edges']} edges")
 
@@ -244,25 +248,9 @@ def _do_ask(cfg: Config, query: str, knid: str | None = None):
 	handler = _load_handler(cfg)
 
 	if knid:
-		# Scope ask to stores in the knid
-		from .retrieval import cosine_scores, edge_scores, gnn_scores, merge, deduplicate, answer as gen_answer
-
-		store_names = handler.registry.stores_in_knid(knid)
-		query_emb = handler.provider.embed_text(query)
-		all_scored = []
-		for sname in store_names:
-			if sname in handler._specialists:
-				spec = handler._specialists[sname]
-				all_scored.append(handler._score_specialist(query_emb, spec.graph, spec.model, spec.strand))
-		# Deduplicate across knid stores
-		scored = deduplicate(all_scored, cfg.top_k)
-		if not scored:
-			print("No relevant knowledge found in knid.")
-			handler.shutdown()
-			return
-		answer, sources = gen_answer(query, scored, handler.provider)
+		answer, sources = handler.ask_knid(query, knid)
 	else:
-		answer, sources = handler.handle_ask(query)
+		answer, sources = handler.ask(query)
 
 	print(f"\n{answer}\n")
 	print("--- Sources ---")
@@ -281,13 +269,13 @@ def _do_explore(cfg: Config):
 		return
 
 	handler = _load_handler(cfg)
-	g = handler.graph
-	print(f"Purpose: {g.purpose or '(none)'}")
-	print(f"Thoughts: {g.num_thoughts}")
-	print(f"Edges: {g.num_edges}")
-	print(f"Maturity: {g.maturity:.2f}")
-	if g.descriptors:
-		print(f"Descriptors: {', '.join(g.descriptors.keys())}")
+	info = handler.graph_info
+	print(f"Purpose: {info['purpose'] or '(none)'}")
+	print(f"Thoughts: {info['thought_count']}")
+	print(f"Edges: {info['edge_count']}")
+	print(f"Maturity: {info['maturity']:.2f}")
+	if info["descriptors"]:
+		print(f"Descriptors: {', '.join(info['descriptors'].keys())}")
 
 
 def _do_ingest_corpus(cfg: Config, corpus_dir: str):
@@ -303,21 +291,34 @@ def _do_ingest_corpus(cfg: Config, corpus_dir: str):
 
 	handler = _load_handler(cfg)
 
+	# Collect already-ingested sources to skip duplicates
+	ingested = handler.ingested_sources()
+
 	for i, f in enumerate(files, 1):
 		if f.name == "manifest.txt":
 			continue
+		if f.stem in ingested:
+			print(f"[{i}/{len(files)}] {f.name} (already ingested, skipping)")
+			continue
 		print(f"[{i}/{len(files)}] {f.name}")
 		text = f.read_text(encoding="utf-8")
-		stats = handler.handle_ingest(text, source=f.stem)
-		print(f"  → {stats['thoughts']} thoughts, {stats['edges']} edges")
+		try:
+			stats = handler.ingest_sync(text, source=f.stem)
+			print(f"  → {stats['thoughts']} thoughts, {stats['edges']} edges")
+			handler.save()
+		except Exception as exc:
+			print(f"  ✗ {exc}")
+			handler.save()
+			continue
 
 	handler.shutdown()
-	print(f"\nDone. Graph: {handler.graph.num_thoughts} thoughts, {handler.graph.num_edges} edges")
+	info = handler.graph_info
+	print(f"\nDone. Graph: {info['thought_count']} thoughts, {info['edge_count']} edges")
 
 
 def _do_new(cfg: Config, knid: str | None = None):
 	"""Interactive: create a new specialist graph."""
-	from .registry import Registry
+	from .registry import Registry, store_path
 	from .specialist import Graph, KnodMPNN, StrandLayer, save_all
 
 	purpose = input("Purpose: ").strip()
@@ -334,17 +335,17 @@ def _do_new(cfg: Config, knid: str | None = None):
 	if not location:
 		location = str(Path.cwd())
 
-	safe_name = name.replace(" ", "_").lower()
-	base = Path(location) / safe_name
+	hashed = store_path(location, name)
+	base = hashed.with_suffix("")
 
-	graph = Graph(purpose=purpose, max_thoughts=cfg.max_thoughts, max_edges=cfg.max_edges)
+	graph = Graph(name=name, purpose=purpose, max_thoughts=cfg.max_thoughts, max_edges=cfg.max_edges)
 	model = KnodMPNN(cfg)
 	strand = StrandLayer(cfg.hidden_dim)
 	save_all(graph, model, strand, base)
 
 	registry = Registry()
-	graph_path = str(base.with_suffix(".graph"))
-	registry.register(name, graph_path, purpose)
+	graph_path = str(hashed)
+	registry.register(graph_path)
 
 	if knid:
 		registry.add_to_knid(knid, name)
@@ -355,26 +356,25 @@ def _do_new(cfg: Config, knid: str | None = None):
 
 def _do_register(cfg: Config, path: str, knid: str | None = None):
 	"""Register an existing graph file."""
-	import pickle
 	from .registry import Registry
+	from .specialist import read_knod_metadata
 
 	graph_path = Path(path)
 	if not graph_path.exists():
 		print(f"File not found: {path}")
 		sys.exit(1)
 
-	# Validate: try to load and check it's a valid graph
+	# Validate: try to read metadata
 	try:
-		with open(graph_path, "rb") as f:
-			state = pickle.load(f)
-		purpose = state.get("purpose", "")
+		meta = read_knod_metadata(str(graph_path))
+		name = meta.get("name") or graph_path.stem
+		purpose = meta.get("purpose", "")
 	except Exception:
 		print(f"Invalid graph file: {path}")
 		sys.exit(1)
 
-	name = graph_path.stem
 	registry = Registry()
-	registry.register(name, str(graph_path.resolve()), purpose)
+	registry.register(str(graph_path.resolve()))
 
 	if knid:
 		registry.add_to_knid(knid, name)
@@ -455,6 +455,18 @@ def _do_knid(cfg: Config, args):
 
 	else:
 		print("Usage: py_knod knid {new|add|remove|list}")
+
+
+def _do_migrate():
+	"""Rename all store files from human-readable names to SHA-256 hashed names."""
+	from .registry import Registry
+
+	registry = Registry()
+	n = registry.migrate_to_hashed()
+	if n:
+		print(f"Migrated {n} store(s) to hashed filenames.")
+	else:
+		print("All stores already use hashed filenames (nothing to migrate).")
 
 
 if __name__ == "__main__":

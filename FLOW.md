@@ -132,13 +132,22 @@ flowchart TB
             Q_S3[Edge embedding search\nquery vs reasoning embeddings\n× 0.8 dampening]:::retrieval
         end
 
-        subgraph Q_MERGE ["Merge"]
+        subgraph Q_MERGE ["Merge · per specialist"]
             direction TB
             Q_WGT[Adaptive weighting\nGNN+edges: 0.4·cos + 0.4·gnn + 0.2·edge\nGNN only:  0.5·cos + 0.5·gnn\nCosine only: cos]:::retrieval
             Q_BST[Access boost\n+log1p·0.02 freq\n+0.05·exp recency]:::retrieval
-            Q_DED[Deduplicate across specialists\nbest score per thought text]:::retrieval
-            Q_WGT --> Q_BST --> Q_DED
+            Q_THR[Adaptive threshold\nscale floor→cfg between maturity × query-quality]:::retrieval
+            Q_WGT --> Q_BST --> Q_THR
         end
+
+        subgraph Q_EXP ["Graph Traversal Expansion · per specialist"]
+            direction TB
+            Q_EXP_BFS[Bounded BFS from seeds\ndepth ≤ traversal_depth\nfan-out ≤ traversal_fan_out]:::retrieval
+            Q_EXP_SCR[Score neighbours:\nedge.weight × edge_cos × thought_cos]:::retrieval
+            Q_EXP_BFS --> Q_EXP_SCR
+        end
+
+        Q_DED[Deduplicate across specialists\nbest score per thought text]:::retrieval
 
         Q_CTX[Assemble top-k context]:::retrieval
         Q_LLM[LLM: generate answer]:::retrieval
@@ -147,6 +156,8 @@ flowchart TB
         Q_IN  --> Q_EMB
         Q_EMB --> Q_S1 & Q_S2 & Q_S3
         Q_S1 & Q_S2 & Q_S3 --> Q_WGT
+        Q_THR --> Q_EXP_BFS
+        Q_EXP_SCR --> Q_DED
         Q_DED --> Q_CTX --> Q_LLM --> Q_OUT
     end
 
@@ -180,6 +191,9 @@ flowchart TB
 
     %% Access tracking feedback (happens during context assembly, after dedup)
     Q_CTX       -.->|"increment access_count\nupdate last_accessed"| SP_T
+
+    %% Traversal expansion uses graph edges
+    SP_E        -->|"edge weights + embeddings"| Q_EXP_BFS
 
     %% ═══════════════════════════════════════════════════════════
     %% STYLES
