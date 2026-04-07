@@ -1,8 +1,3 @@
-"""Phase 3 · Link — LLM evaluates weight + reasoning per candidate (parallel).
-
-Filters candidates by min_link_weight, then embeds the reasoning strings.
-"""
-
 import logging
 from concurrent.futures import ThreadPoolExecutor
 
@@ -14,7 +9,6 @@ log = logging.getLogger(__name__)
 
 
 def _link_one(pt: PreparedThought, provider: Provider, cfg: Config):
-	"""Evaluate links for a single thought against its candidates."""
 	if not pt.candidate_texts:
 		return
 	results = provider.batch_link_reason(pt.text, pt.candidate_texts)
@@ -27,6 +21,5 @@ def _link_one(pt: PreparedThought, provider: Provider, cfg: Config):
 
 
 def link(article: PreparedArticle, provider: Provider, cfg: Config):
-	"""Phase 3: Evaluate weight + reasoning per candidate in parallel, embed reasoning strings."""
 	with ThreadPoolExecutor(max_workers=4) as pool:
 		list(pool.map(lambda pt: _link_one(pt, provider, cfg), article.thoughts))

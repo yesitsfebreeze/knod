@@ -14,7 +14,7 @@ import torch
 from ..config import Config
 from ..specialist.graph import Graph
 from ..specialist.gnn import KnodMPNN, StrandLayer
-from ..specialist.math import cosine
+from ..util.math import cosine
 
 log = logging.getLogger(__name__)
 
@@ -64,6 +64,14 @@ def gnn_scores(
 	targets = [id_map[e.target_id] for e in valid_edges]
 	edge_index = torch.tensor([sources, targets], dtype=torch.long)
 	edge_features = torch.stack([torch.from_numpy(e.embedding) for e in valid_edges])
+
+	# Modulate edge features by success_rate: edges with retrieval feedback
+	# get a small boost (1.0 to 1.5×), preserving dimensionality.
+	success_scales = torch.tensor(
+		[1.0 + 0.5 * e.success_rate for e in valid_edges],
+		dtype=edge_features.dtype,
+	).unsqueeze(-1)
+	edge_features = edge_features * success_scales
 
 	try:
 		with torch.no_grad():

@@ -105,11 +105,13 @@ def _build_path_context(
 				continue
 			rendered = _render_chain(chain)
 			chain_parts.append(rendered)
+			chain_used = False
 			for thought, _ in chain.steps:
 				if thought.id not in seen_ids:
 					seen_ids.add(thought.id)
 					thought.access_count += 1
 					thought.last_accessed = now
+					chain_used = True
 					# Find score from scored list for this thought
 					score = next((s for t, s in scored if t.id == thought.id), chain.score)
 					sources.append(
@@ -120,6 +122,10 @@ def _build_path_context(
 							"source": thought.source,
 						}
 					)
+			# Mark edges in this chain as successful if the chain contributed context
+			if chain_used and hasattr(chain, "traversed_edges"):
+				for edge in chain.traversed_edges:
+					edge.success_count += 1
 		if chain_parts:
 			context_sections.append("Reasoning chains:\n" + "\n\n".join(chain_parts))
 

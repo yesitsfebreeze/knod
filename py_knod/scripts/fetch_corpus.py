@@ -16,72 +16,65 @@ import urllib.request
 CORPUS_DIR = "corpus"
 
 # Each entry: (filename_stem, url, category)
-# category is "on" (herpetology-related) or "off" (noise).
+# category is "on" (knowledge systems / AI / retrieval) or "off" (noise).
 SOURCES = [
-	# --- turtles & tortoises ---
-	("turtle", "https://en.wikipedia.org/wiki/Turtle", "on"),
-	("sea_turtle", "https://en.wikipedia.org/wiki/Sea_turtle", "on"),
-	("tortoise", "https://en.wikipedia.org/wiki/Tortoise", "on"),
-	("turtle_shell", "https://en.wikipedia.org/wiki/Turtle_shell", "on"),
-	("green_sea_turtle", "https://en.wikipedia.org/wiki/Green_sea_turtle", "on"),
-	("leatherback", "https://en.wikipedia.org/wiki/Leatherback_sea_turtle", "on"),
-	("hawksbill", "https://en.wikipedia.org/wiki/Hawksbill_sea_turtle", "on"),
-	("loggerhead", "https://en.wikipedia.org/wiki/Loggerhead_sea_turtle", "on"),
-	("box_turtle", "https://en.wikipedia.org/wiki/Box_turtle", "on"),
-	("snapping_turtle", "https://en.wikipedia.org/wiki/Common_snapping_turtle", "on"),
-	("flatback", "https://en.wikipedia.org/wiki/Flatback_sea_turtle", "on"),
-	("turtle_excluder", "https://en.wikipedia.org/wiki/Turtle_excluder_device", "on"),
-	("painted_turtle", "https://en.wikipedia.org/wiki/Painted_turtle", "on"),
-	("aldabra_tortoise", "https://en.wikipedia.org/wiki/Aldabra_giant_tortoise", "on"),
-	(
-		"galapagos_tortoise",
-		"https://en.wikipedia.org/wiki/Gal%C3%A1pagos_tortoise",
-		"on",
-	),
-	("olive_ridley", "https://en.wikipedia.org/wiki/Olive_ridley_sea_turtle", "on"),
-	("kemp_ridley", "https://en.wikipedia.org/wiki/Kemp%27s_ridley_sea_turtle", "on"),
-	("chelonia", "https://en.wikipedia.org/wiki/Testudines", "on"),
-	# --- snakes ---
-	("snake", "https://en.wikipedia.org/wiki/Snake", "on"),
-	("king_cobra", "https://en.wikipedia.org/wiki/King_cobra", "on"),
-	("reticulated_python", "https://en.wikipedia.org/wiki/Reticulated_python", "on"),
-	("boa_constrictor", "https://en.wikipedia.org/wiki/Boa_constrictor", "on"),
-	("rattlesnake", "https://en.wikipedia.org/wiki/Rattlesnake", "on"),
-	("venom", "https://en.wikipedia.org/wiki/Venom", "on"),
-	# --- lizards ---
-	("lizard", "https://en.wikipedia.org/wiki/Lizard", "on"),
-	("komodo_dragon", "https://en.wikipedia.org/wiki/Komodo_dragon", "on"),
-	("gecko", "https://en.wikipedia.org/wiki/Gecko", "on"),
-	("iguana", "https://en.wikipedia.org/wiki/Iguana", "on"),
-	("chameleon", "https://en.wikipedia.org/wiki/Chameleon", "on"),
-	("monitor_lizard", "https://en.wikipedia.org/wiki/Monitor_lizard", "on"),
-	# --- crocodilians ---
-	("crocodilian", "https://en.wikipedia.org/wiki/Crocodilia", "on"),
-	("nile_crocodile", "https://en.wikipedia.org/wiki/Nile_crocodile", "on"),
-	("american_alligator", "https://en.wikipedia.org/wiki/American_alligator", "on"),
-	("gharial", "https://en.wikipedia.org/wiki/Gharial", "on"),
-	# --- amphibians (outgroup for comparison) ---
-	("frog", "https://en.wikipedia.org/wiki/Frog", "on"),
-	("salamander", "https://en.wikipedia.org/wiki/Salamander", "on"),
-	("axolotl", "https://en.wikipedia.org/wiki/Axolotl", "on"),
-	# --- reptile biology & conservation ---
-	("reptile", "https://en.wikipedia.org/wiki/Reptile", "on"),
-	("ectotherm", "https://en.wikipedia.org/wiki/Ectotherm", "on"),
-	("scale_anatomy", "https://en.wikipedia.org/wiki/Scale_(anatomy)", "on"),
-	("reptile_egg", "https://en.wikipedia.org/wiki/Egg", "on"),
-	("hibernation", "https://en.wikipedia.org/wiki/Hibernation", "on"),
-	("cites", "https://en.wikipedia.org/wiki/CITES", "on"),
-	("iucn_red_list", "https://en.wikipedia.org/wiki/IUCN_Red_List", "on"),
-	("wildlife_trade", "https://en.wikipedia.org/wiki/Wildlife_trade", "on"),
+	# --- knowledge representation ---
+	("knowledge_graph", "https://en.wikipedia.org/wiki/Knowledge_graph", "on"),
+	("semantic_web", "https://en.wikipedia.org/wiki/Semantic_Web", "on"),
+	("ontology_cs", "https://en.wikipedia.org/wiki/Ontology_(information_science)", "on"),
+	("rdf", "https://en.wikipedia.org/wiki/Resource_Description_Framework", "on"),
+	("triple_store", "https://en.wikipedia.org/wiki/Triplestore", "on"),
+	("knowledge_representation", "https://en.wikipedia.org/wiki/Knowledge_representation_and_reasoning", "on"),
+	("graph_database", "https://en.wikipedia.org/wiki/Graph_database", "on"),
+	# --- neural networks & GNNs ---
+	("neural_network", "https://en.wikipedia.org/wiki/Neural_network_(machine_learning)", "on"),
+	("graph_neural_network", "https://en.wikipedia.org/wiki/Graph_neural_network", "on"),
+	("transformer_model", "https://en.wikipedia.org/wiki/Transformer_(deep_learning_architecture)", "on"),
+	("attention_mechanism", "https://en.wikipedia.org/wiki/Attention_(machine_learning)", "on"),
+	("deep_learning", "https://en.wikipedia.org/wiki/Deep_learning", "on"),
+	("backpropagation", "https://en.wikipedia.org/wiki/Backpropagation", "on"),
+	("recurrent_nn", "https://en.wikipedia.org/wiki/Recurrent_neural_network", "on"),
+	# --- embeddings & similarity ---
+	("word_embedding", "https://en.wikipedia.org/wiki/Word_embedding", "on"),
+	("word2vec", "https://en.wikipedia.org/wiki/Word2vec", "on"),
+	("cosine_similarity", "https://en.wikipedia.org/wiki/Cosine_similarity", "on"),
+	("vector_space_model", "https://en.wikipedia.org/wiki/Vector_space_model", "on"),
+	("dimensionality_reduction", "https://en.wikipedia.org/wiki/Dimensionality_reduction", "on"),
+	# --- information retrieval ---
+	("information_retrieval", "https://en.wikipedia.org/wiki/Information_retrieval", "on"),
+	("semantic_search", "https://en.wikipedia.org/wiki/Semantic_search", "on"),
+	("vector_database", "https://en.wikipedia.org/wiki/Vector_database", "on"),
+	("tf_idf", "https://en.wikipedia.org/wiki/Tf%E2%80%93idf", "on"),
+	("inverted_index", "https://en.wikipedia.org/wiki/Inverted_index", "on"),
+	("relevance_feedback", "https://en.wikipedia.org/wiki/Relevance_feedback", "on"),
+	# --- probabilistic methods ---
+	("markov_chain", "https://en.wikipedia.org/wiki/Markov_chain", "on"),
+	("mcmc", "https://en.wikipedia.org/wiki/Markov_chain_Monte_Carlo", "on"),
+	("bayesian_inference", "https://en.wikipedia.org/wiki/Bayesian_inference", "on"),
+	("metropolis_hastings", "https://en.wikipedia.org/wiki/Metropolis%E2%80%93Hastings_algorithm", "on"),
+	# --- graph algorithms ---
+	("graph_theory", "https://en.wikipedia.org/wiki/Graph_theory", "on"),
+	("dijkstra", "https://en.wikipedia.org/wiki/Dijkstra%27s_algorithm", "on"),
+	("breadth_first_search", "https://en.wikipedia.org/wiki/Breadth-first_search", "on"),
+	("pagerank", "https://en.wikipedia.org/wiki/PageRank", "on"),
+	# --- systems / infrastructure ---
+	("rack_server", "https://en.wikipedia.org/wiki/19-inch_rack", "on"),
+	("data_center", "https://en.wikipedia.org/wiki/Data_center", "on"),
+	("server_hardware", "https://en.wikipedia.org/wiki/Server_(computing)", "on"),
+	("api", "https://en.wikipedia.org/wiki/API", "on"),
+	("rest_api", "https://en.wikipedia.org/wiki/REST", "on"),
+	("tcp_protocol", "https://en.wikipedia.org/wiki/Transmission_Control_Protocol", "on"),
+	("memory_management", "https://en.wikipedia.org/wiki/Memory_management", "on"),
+	("cache_computing", "https://en.wikipedia.org/wiki/Cache_(computing)", "on"),
 	# --- off-topic noise ---
 	("surfing", "https://en.wikipedia.org/wiki/Surfing", "off"),
-	("volcano", "https://en.wikipedia.org/wiki/Volcano", "off"),
+	("origami", "https://en.wikipedia.org/wiki/Origami", "off"),
 	("jazz", "https://en.wikipedia.org/wiki/Jazz", "off"),
 	("chess", "https://en.wikipedia.org/wiki/Chess", "off"),
-	("bicycle", "https://en.wikipedia.org/wiki/Bicycle", "off"),
-	("blockchain", "https://en.wikipedia.org/wiki/Blockchain", "off"),
-	("opera", "https://en.wikipedia.org/wiki/Opera", "off"),
-	("typography", "https://en.wikipedia.org/wiki/Typography", "off"),
+	("pottery", "https://en.wikipedia.org/wiki/Pottery", "off"),
+	("ballet", "https://en.wikipedia.org/wiki/Ballet", "off"),
+	("beekeeping", "https://en.wikipedia.org/wiki/Beekeeping", "off"),
+	("calligraphy", "https://en.wikipedia.org/wiki/Calligraphy", "off"),
 ]
 
 MAX_CHARS = 25_000

@@ -26,6 +26,7 @@ import torch
 
 from .graph import Graph, Thought, Edge, LimboThought
 from .gnn import KnodMPNN, StrandLayer
+from ..util.graph_serde import graph_to_state, graph_from_state
 
 log = logging.getLogger(__name__)
 
@@ -123,19 +124,7 @@ def save_graph(graph: Graph, path: str | Path):
 	path = Path(path)
 	path.parent.mkdir(parents=True, exist_ok=True)
 
-	state = {
-		"name": graph.name,
-		"purpose": graph.purpose,
-		"descriptors": graph.descriptors,
-		"next_id": graph._next_id,
-		"profile": graph._profile,
-		"registry_nodes": graph._registry_nodes,
-		"max_thoughts": graph.max_thoughts,
-		"max_edges": graph.max_edges,
-		"thoughts": {tid: t.to_dict() for tid, t in graph.thoughts.items()},
-		"edges": [e.to_dict() for e in graph.edges],
-		"limbo": [lt.to_dict() for lt in graph.limbo],
-	}
+	state = graph_to_state(graph, include_limbo=True)
 	with open(path, "wb") as f:
 		pickle.dump(state, f)
 	# Compaction: clear the append log since full state is now on disk
@@ -147,23 +136,7 @@ def load_graph(path: str | Path) -> Graph:
 	with open(path, "rb") as f:
 		state = pickle.load(f)
 
-	graph = Graph(name=state.get("name", ""), purpose=state["purpose"])
-	graph.descriptors = state.get("descriptors", {})
-	graph._next_id = state["next_id"]
-	graph._profile = state.get("profile")
-	graph._registry_nodes = state.get("registry_nodes", {})
-	graph.max_thoughts = state.get("max_thoughts", 0)
-	graph.max_edges = state.get("max_edges", 0)
-
-	for tid_str, tdata in state["thoughts"].items():
-		tid = int(tid_str) if isinstance(tid_str, str) else tid_str
-		graph.thoughts[tid] = Thought.from_dict(tid, tdata)
-
-	for edata in state["edges"]:
-		graph.edges.append(Edge.from_dict(edata))
-
-	for ldata in state.get("limbo", []):
-		graph.limbo.append(LimboThought.from_dict(ldata))
+	graph = graph_from_state(state)
 
 	# Replay any append log entries written since last compaction
 	glog = GraphLog(path)
@@ -307,21 +280,6 @@ def _parse_knod_sections(data: bytes) -> list[tuple[int, bytes]]:
 	return sections
 
 
-def _graph_state(graph: Graph) -> dict:
-	"""Serialize graph to a state dict (no limbo — that's a separate section)."""
-	return {
-		"name": graph.name,
-		"purpose": graph.purpose,
-		"descriptors": graph.descriptors,
-		"next_id": graph._next_id,
-		"profile": graph._profile,
-		"max_thoughts": graph.max_thoughts,
-		"max_edges": graph.max_edges,
-		"thoughts": {tid: t.to_dict() for tid, t in graph.thoughts.items()},
-		"edges": [e.to_dict() for e in graph.edges],
-	}
-
-
 def _model_bytes(model: KnodMPNN, strand: StrandLayer) -> bytes:
 	"""Serialize model + strand state_dict to bytes via torch.save."""
 	buf = io.BytesIO()
@@ -340,7 +298,7 @@ def save_knod(graph: Graph, model: KnodMPNN, strand: StrandLayer, path: str | Pa
 		f.write(struct.pack("<i", KNOD_VERSION))
 
 		# GRAPH section
-		_write_section(f, SECTION_GRAPH, pickle.dumps(_graph_state(graph)))
+		_write_section(f, SECTION_GRAPH, pickle.dumps(graph_to_state(graph)))
 
 		# MODEL section
 		_write_section(f, SECTION_MODEL, _model_bytes(model, strand))
@@ -388,20 +346,7 @@ def load_knod(cfg, path: str | Path) -> tuple[Graph, KnodMPNN, StrandLayer]:
 		raise ValueError(f"No GRAPH section in {path}")
 
 	# Reconstruct graph
-	graph = Graph(name=graph_state.get("name", ""), purpose=graph_state["purpose"])
-	graph.descriptors = graph_state.get("descriptors", {})
-	graph._next_id = graph_state["next_id"]
-	graph._profile = graph_state.get("profile")
-	graph.max_thoughts = graph_state.get("max_thoughts", 0)
-	graph.max_edges = graph_state.get("max_edges", 0)
-	graph.maturity_divisor = getattr(cfg, "maturity_divisor", 50)
-
-	for tid_str, tdata in graph_state["thoughts"].items():
-		tid = int(tid_str) if isinstance(tid_str, str) else tid_str
-		graph.thoughts[tid] = Thought.from_dict(tid, tdata)
-
-	for edata in graph_state["edges"]:
-		graph.edges.append(Edge.from_dict(edata))
+	graph = graph_from_state(graph_state, maturity_divisor=getattr(cfg, "maturity_divisor", 50))
 
 	if limbo_data:
 		for ldata in limbo_data:

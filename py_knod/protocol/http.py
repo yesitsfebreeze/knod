@@ -68,6 +68,34 @@ def http(handler: Handler) -> FastAPI:
 	def explore():
 		return handler.graph_info
 
+	@app.get("/stats")
+	def stats():
+		return handler.graph_stats()
+
+	@app.get("/specialists")
+	def specialists():
+		return handler.list_specialists()
+
+	@app.get("/thought/{thought_id}")
+	def get_thought(thought_id: int):
+		result = handler.explore_thought(thought_id)
+		if result is None:
+			from fastapi.responses import JSONResponse
+			return JSONResponse(status_code=404, content={"error": f"Thought {thought_id} not found"})
+		return result
+
+	@app.get("/traverse/{start_id}")
+	def traverse(start_id: int, depth: int = 2, max_nodes: int = 50):
+		result = handler.traverse(start_id, depth=depth, max_nodes=max_nodes)
+		if result is None:
+			from fastapi.responses import JSONResponse
+			return JSONResponse(status_code=404, content={"error": f"Thought {start_id} not found"})
+		return result
+
+	@app.post("/ingest/sync", response_model=None)
+	def ingest_sync(req: IngestRequest):
+		return handler.ingest_sync(req.text, req.source, req.descriptor)
+
 	@app.get("/health")
 	def health():
 		return {"status": "ok"}

@@ -21,27 +21,13 @@ import socket
 import struct
 import threading
 
-from ..handler import Handler, GraphEvent
+from ..handler import Handler
+from ..specialist.types import GraphEvent
+from ..util.net import recv_exact, send_frame
 
 log = logging.getLogger(__name__)
 
 _HEADER = struct.Struct("!I")  # uint32 big-endian
-
-
-def _recv_exact(sock: socket.socket, n: int) -> bytes:
-	"""Read exactly n bytes or raise ConnectionError."""
-	buf = bytearray()
-	while len(buf) < n:
-		chunk = sock.recv(n - len(buf))
-		if not chunk:
-			raise ConnectionError("connection closed")
-		buf.extend(chunk)
-	return bytes(buf)
-
-
-def _send_frame(sock: socket.socket, data: bytes):
-	"""Send a length-prefixed frame."""
-	sock.sendall(_HEADER.pack(len(data)) + data)
 
 
 def _dispatch(sock: socket.socket, handler: Handler, text: str, subscribers: set) -> str:
@@ -108,15 +94,15 @@ def _handle_framed(sock: socket.socket, handler: Handler, first_hdr: bytes, subs
 
 			if msg_len == 0:
 				# keepalive ping → echo empty frame
-				_send_frame(sock, b"")
-				hdr = bytearray(_recv_exact(sock, 4))
+				send_frame(sock, b"")
+				hdr = bytearray(recv_exact(sock, 4))
 				continue
 
-			body = _recv_exact(sock, msg_len).decode("utf-8", errors="replace")
+			body = recv_exact(sock, msg_len).decode("utf-8", errors="replace")
 			reply = _dispatch(sock, handler, body, subscribers)
-			_send_frame(sock, reply.encode("utf-8"))
+			send_frame(sock, reply.encode("utf-8"))
 
-			hdr = bytearray(_recv_exact(sock, 4))
+			hdr = bytearray(recv_exact(sock, 4))
 	except (ConnectionError, OSError):
 		pass
 	finally:
@@ -149,7 +135,7 @@ def _handle_legacy(sock: socket.socket, handler: Handler, first_byte: bytes, sub
 def _handle_connection(sock: socket.socket, handler: Handler, subscribers: set):
 	"""Detect protocol mode from first byte, then dispatch."""
 	try:
-		first = _recv_exact(sock, 1)
+		first = recv_exact(sock, 1)
 	except ConnectionError:
 		sock.close()
 		return
@@ -160,7 +146,7 @@ def _handle_connection(sock: socket.socket, handler: Handler, subscribers: set):
 	else:
 		# Binary → framed session, read remaining 3 bytes of header
 		try:
-			rest = _recv_exact(sock, 3)
+			rest = recv_exact(sock, 3)
 		except ConnectionError:
 			sock.close()
 			return

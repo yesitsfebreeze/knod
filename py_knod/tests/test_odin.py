@@ -43,11 +43,11 @@ CORPUS_DIR = os.path.join(PROJECT_ROOT, "corpus")
 
 # Corpus files used for ingestion tests (keep small so tests are fast)
 INGEST_FILES = [
-	"turtle_shell.txt",
-	"green_sea_turtle.txt",
-	"sea_turtle.txt",
-	"tortoise.txt",
-	"leatherback.txt",
+	"knowledge_graph.txt",
+	"graph_neural_network.txt",
+	"word_embedding.txt",
+	"information_retrieval.txt",
+	"semantic_search.txt",
 ]
 
 # Timeouts: ingest calls the embedding API per chunk, which can be slow
@@ -127,7 +127,7 @@ def test_binary_exists():
 
 
 def test_ingest_and_explore(graph_path: str) -> bool:
-	"""Ingest turtle corpus into graph_path, verify with explore."""
+	"""Ingest corpus into graph_path, verify with explore."""
 	print("\n=== Ingest + Explore ===")
 
 	# Ingest 5 articles one by one
@@ -185,7 +185,7 @@ def test_internal_query(graph_path: str):
 	print("\n=== --internal-query (subprocess mode) ===")
 
 	r = run(
-		["--internal-query", f"--graph={graph_path}", "--query=What is a turtle shell made of?"],
+		["--internal-query", f"--graph={graph_path}", "--query=How does a knowledge graph store relationships?"],
 		timeout=ASK_TIMEOUT,
 	)
 	check("--internal-query exits 0", r.returncode == 0)
@@ -218,7 +218,7 @@ def test_internal_query(graph_path: str):
 
 	# Test with an irrelevant query — should still exit 0 (may return empty)
 	r2 = run(
-		["--internal-query", f"--graph={graph_path}", "--query=blockchain smart contract DeFi"],
+		["--internal-query", f"--graph={graph_path}", "--query=best pizza recipes in Naples Italy"],
 		timeout=ASK_TIMEOUT,
 	)
 	check("--internal-query irrelevant query exits 0", r2.returncode == 0)
@@ -228,10 +228,13 @@ def test_ask_single_store(graph_path: str):
 	"""Test ask --graph (single-store path via handle_ask)."""
 	print("\n=== ask --graph (single-store) ===")
 
-	# Use questions very directly about the ingested content (turtle shell + sea turtle corpus)
+	# Use questions very directly about the ingested content (knowledge graphs + retrieval corpus)
 	questions = [
-		("What is a turtle shell made of?", ["bone", "keratin", "scute", "shell", "carapace", "plastron"]),
-		("What is the leatherback sea turtle?", ["leatherback", "largest", "species", "turtle"]),
+		("How does a knowledge graph represent relationships?", ["graph", "node", "edge", "relation", "triple", "link"]),
+		(
+			"What is the role of embeddings in semantic search?",
+			["embed", "vector", "semantic", "represent", "dimension", "search"],
+		),
 	]
 
 	for q, hints in questions:
@@ -273,11 +276,11 @@ def test_ask_multi_store_fallback(graph_path: str):
 	print("\n=== ask (multi-store fallback via --graph) ===")
 
 	# ask with --graph ensures single-store mode with our temp graph
-	r = run(["ask", "--graph", graph_path, "What do sea turtles eat?"], timeout=ASK_TIMEOUT)
+	r = run(["ask", "--graph", graph_path, "How do retrieval systems rank results?"], timeout=ASK_TIMEOUT)
 	if is_api_failure(r):
 		skip("ask (explicit graph) exits 0", "OpenAI API")
 		skip("  got non-empty answer", "OpenAI API")
-		skip("  answer is about turtle diet", "OpenAI API")
+		skip("  answer is about retrieval ranking", "OpenAI API")
 		return
 	ok = r.returncode == 0
 	check("ask (explicit graph) exits 0", ok)
@@ -285,9 +288,9 @@ def test_ask_multi_store_fallback(graph_path: str):
 		answer = r.stdout.strip()
 		check(f"  got non-empty answer ({len(answer)} chars)", len(answer) > 10)
 		relevant = any(
-			w in answer.lower() for w in ["seagrass", "algae", "herb", "plant", "feed", "eat", "jellyfish", "sponge"]
+			w in answer.lower() for w in ["rank", "score", "relevance", "retriev", "search", "similar", "query", "match"]
 		)
-		check("  answer is about turtle diet", relevant)
+		check("  answer is about retrieval ranking", relevant)
 		if not relevant:
 			print(f"    answer: {answer[:200]}")
 	else:
@@ -335,11 +338,11 @@ def test_ask_multi_store_with_registry(store_name: str):
 	print("\n=== ask (multi-store with registry) ===")
 
 	print(f"  querying via registered store '{store_name}'...", flush=True)
-	r = run(["ask", "What threats do sea turtles face?"], timeout=ASK_TIMEOUT)
+	r = run(["ask", "What are the advantages of graph-based retrieval over flat search?"], timeout=ASK_TIMEOUT)
 	if is_api_failure(r):
 		skip("ask (multi-store registered) exits 0", "OpenAI API")
 		skip("  got non-empty answer", "OpenAI API")
-		skip("  answer is about threats", "OpenAI API")
+		skip("  answer is about graph retrieval", "OpenAI API")
 		return
 	ok = r.returncode == 0
 	check("ask (multi-store registered) exits 0", ok)
@@ -347,9 +350,10 @@ def test_ask_multi_store_with_registry(store_name: str):
 		answer = r.stdout.strip()
 		check(f"  got non-empty answer ({len(answer)} chars)", len(answer) > 10)
 		relevant = any(
-			w in answer.lower() for w in ["poach", "plastic", "habitat", "fish", "hunt", "threat", "danger", "bycatch"]
+			w in answer.lower()
+			for w in ["graph", "travers", "neighbor", "relation", "context", "connect", "structure", "edge"]
 		)
-		check("  answer is about threats", relevant)
+		check("  answer is about graph retrieval", relevant)
 		if not relevant:
 			print(f"    answer: {answer[:200]}")
 	else:
@@ -362,7 +366,7 @@ def test_knid_management(graph_path: str, store_name: str):
 	"""
 	print("\n=== knid management ===")
 
-	knid = "test_reptiles_knod_integ"  # unlikely to clash with real knids
+	knid = "test_retrieval_knod_integ"  # unlikely to clash with real knids
 
 	# Best-effort: remove any leftover knid from a previous failed run
 	# (there's no 'knid delete', so we clean the registry file directly)
@@ -394,7 +398,7 @@ def test_knid_management(graph_path: str, store_name: str):
 
 	# ask --knid <knid>
 	print(f"  ask --knid {knid} ...", flush=True)
-	r = run(["ask", "--knid", knid, "How big do sea turtles get?"], timeout=ASK_TIMEOUT)
+	r = run(["ask", "--knid", knid, "How do knowledge graphs improve AI memory?"], timeout=ASK_TIMEOUT)
 	if is_api_failure(r):
 		skip(f"ask --knid '{knid}' exits 0", "OpenAI API")
 		skip(f"  got non-empty answer", "OpenAI API")
@@ -444,8 +448,8 @@ def test_ingest_dedup(graph_path: str):
 	before = int(m0.group(1)) if m0 else 0
 
 	# Re-ingest a file already ingested
-	fpath = os.path.join(CORPUS_DIR, "turtle_shell.txt")
-	print(f"  re-ingesting turtle_shell.txt (before: {before} thoughts)...", flush=True)
+	fpath = os.path.join(CORPUS_DIR, "knowledge_graph.txt")
+	print(f"  re-ingesting knowledge_graph.txt (before: {before} thoughts)...", flush=True)
 	r = run(["ingest", "--graph", graph_path, fpath], timeout=INGEST_TIMEOUT)
 	check("re-ingest exits 0", r.returncode == 0)
 
@@ -560,7 +564,7 @@ def main():
 		shutil.rmtree(tmp, ignore_errors=True)
 		# Clean up registry entry and test knid if we created one
 		if not skip_registry:
-			_cleanup_knid_section("test_reptiles_knod_integ")
+			_cleanup_knid_section("test_retrieval_knod_integ")
 			if store_name:
 				cleanup_registry(store_name)
 

@@ -1,19 +1,3 @@
-"""Specialist registry — store list + knid groupings at ~/.config/knod/stores.
-
-Format:
-  /path/to/specialist.knod
-  /path/to/other.knod
-
-  [health]
-  Medical Specialist
-  Anatomy Specialist
-
-  [marine]
-  Sea Turtle Specialist
-
-Names and purposes are read from .knod file metadata on load.
-"""
-
 import hashlib
 import logging
 from pathlib import Path
@@ -22,24 +6,14 @@ log = logging.getLogger(__name__)
 
 
 def store_hash(name: str) -> str:
-	"""SHA-256 hash of a specialist name, used as opaque filename."""
 	return hashlib.sha256(name.lower().strip().encode("utf-8")).hexdigest()
 
 
 def store_path(store_dir: str | Path, name: str) -> Path:
-	"""Return the hashed .knod path for a specialist name inside *store_dir*."""
 	return Path(store_dir) / f"{store_hash(name)}.knod"
 
 
 class Registry:
-	"""Manages specialist entries and knid groupings.
-
-	Persists to ~/.config/knod/stores.
-	Top-level lines are paths to .knod files.
-	``[knid_name]`` sections list store names belonging to that knid.
-
-	On load, each .knod file is read for its name and purpose metadata.
-	"""
 
 	def __init__(self):
 		self._path = Path.home() / ".config" / "knod" / "stores"
@@ -48,7 +22,6 @@ class Registry:
 		self._load()
 
 	def _read_metadata(self, path: str) -> dict | None:
-		"""Read name and purpose from a .knod file. Returns None on failure."""
 		try:
 			from .specialist import read_knod_metadata
 			meta = read_knod_metadata(path)
@@ -111,7 +84,6 @@ class Registry:
 			self.save()
 
 	def _append(self, path: str):
-		"""Append a single store path without rewriting the file."""
 		self._path.parent.mkdir(parents=True, exist_ok=True)
 		with self._path.open("a", encoding="utf-8") as f:
 			f.write(f"{path}\n")
@@ -135,7 +107,6 @@ class Registry:
 		self._path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 	def register(self, path: str, name: str = "", purpose: str = ""):
-		"""Register a .knod file. Name and purpose are read from the file if not provided."""
 		resolved = str(Path(path).resolve())
 		if not name or not purpose:
 			meta = self._read_metadata(resolved)
@@ -160,14 +131,12 @@ class Registry:
 	# ---- knid management ----
 
 	def add_to_knid(self, knid_name: str, store_name: str):
-		"""Add a store to a knid group. Creates the knid if it doesn't exist."""
 		if knid_name not in self.knids:
 			self.knids[knid_name] = set()
 		self.knids[knid_name].add(store_name)
 		self.save()
 
 	def remove_from_knid(self, knid_name: str, store_name: str) -> bool:
-		"""Remove a store from a knid group. Returns True if found."""
 		if knid_name not in self.knids:
 			return False
 		members = self.knids[knid_name]
@@ -180,19 +149,12 @@ class Registry:
 		return True
 
 	def list_knids(self) -> dict[str, set[str]]:
-		"""Return all knid groupings."""
 		return dict(self.knids)
 
 	def stores_in_knid(self, knid_name: str) -> set[str]:
-		"""Return store names in a specific knid."""
 		return set(self.knids.get(knid_name, set()))
 
 	def migrate_to_hashed(self):
-		"""Rename store files from human-readable names to SHA-256 hashed names.
-
-		Skips stores whose file is already a 64-hex-char hash. Updates
-		the registry paths in-place and rewrites the stores file.
-		"""
 		import re
 		migrated = 0
 		for name, entry in list(self.stores.items()):

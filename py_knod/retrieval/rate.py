@@ -10,6 +10,7 @@ to the actual question.
 import numpy as np
 
 from ..specialist.graph import Thought
+from ..util.math import cosine
 
 
 def rate_thoughts(
@@ -36,13 +37,11 @@ def rate_thoughts(
 	if not scored:
 		return scored
 
-	q_norm = query_emb / (np.linalg.norm(query_emb) + 1e-10)
 	direct_weight = 1.0 - merge_weight
 
 	rated: list[tuple[Thought, float]] = []
 	for thought, merge_score in scored:
-		t_norm = thought.embedding / (np.linalg.norm(thought.embedding) + 1e-10)
-		direct_sim = float(np.dot(t_norm, q_norm))
+		direct_sim = cosine(thought.embedding, query_emb)
 		rating = merge_weight * merge_score + direct_weight * direct_sim
 		rated.append((thought, rating))
 

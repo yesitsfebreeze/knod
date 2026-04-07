@@ -3,8 +3,6 @@
 import logging
 import threading
 import time as _time
-from collections.abc import Callable
-from dataclasses import dataclass, field
 from pathlib import Path
 from queue import Queue, Full
 
@@ -18,12 +16,17 @@ from .specialist import (
 	KnodMPNN,
 	StrandLayer,
 	GNNTrainer,
+	GraphEvent,
+	EventListener,
+	SpecialistIndexEntry,
+	Specialist,
+	IngestResult,
 	save_all,
 	load_all,
 	load_base_model,
 	read_knod_metadata,
 )
-from .specialist.math import cosine
+from .util.math import cosine
 from .ingest import Ingester
 from .limbo import find_clusters, promote_cluster
 from .retrieval import (
@@ -43,47 +46,6 @@ from .retrieval import (
 log = logging.getLogger(__name__)
 
 QUEUE_CAPACITY = 128
-
-# --- Event bus types ---
-
-
-@dataclass(frozen=True)
-class GraphEvent:
-	"""Typed event fired after significant state changes."""
-
-	kind: str  # "ingest_complete" | "limbo_promoted" | "status_changed"
-	thoughts: int
-	edges: int
-	committed: int  # number newly committed (0 for non-ingest events)
-	detail: dict = field(default_factory=dict)
-
-
-EventListener = Callable[[GraphEvent], None]
-
-
-@dataclass
-class SpecialistIndexEntry:
-	"""Lightweight metadata for one specialist, built on startup."""
-
-	name: str
-	purpose: str
-	descriptors: dict[str, str]
-	profile: np.ndarray | None
-	num_thoughts: int
-	num_edges: int
-
-
-class Specialist:
-	"""One specialist = graph + model + strand."""
-
-	__slots__ = ("name", "purpose", "graph", "model", "strand")
-
-	def __init__(self, name, purpose, graph, model, strand):
-		self.name = name
-		self.purpose = purpose
-		self.graph = graph
-		self.model = model
-		self.strand = strand
 
 
 class Handler:
@@ -107,6 +69,7 @@ class Handler:
 		# Event bus — replaces raw-socket pub/sub
 		self._listeners: dict[str, list[EventListener]] = {}
 		self._listeners_lock = threading.Lock()
+		self._retrieval_count: int = 0
 
 	def init(self):
 		base = Path(self.cfg.graph_path).with_suffix("")
@@ -178,14 +141,13 @@ class Handler:
 
 	# ---- core operations ----
 
-	def _ingest_sync(self, text: str, source: str = "", descriptor: str = "") -> int:
-		committed = self.ingester.ingest(text, source, descriptor)
-		n_committed = len(committed)
+	def _ingest_sync(self, text: str, source: str = "", descriptor: str = "") -> IngestResult:
+		result = self.ingester.ingest(text, source, descriptor)
 		with self.mu:
 			# Apply edge decay if configured
 			if self.cfg.decay_coefficient > 0:
 				self.graph.apply_edge_decay(self.cfg.decay_coefficient)
-			if committed and self.graph.num_edges > 0:
+			if result.committed and self.graph.num_edges > 0:
 				# Reload base model (may have been updated by specialist training)
 				load_base_model(self.model)
 				loss = self.trainer.train_on_graph(self.graph)
@@ -196,16 +158,19 @@ class Handler:
 				kind="ingest_complete",
 				thoughts=self.graph.num_thoughts,
 				edges=self.graph.num_edges,
-				committed=n_committed,
+				committed=len(result.committed),
 			)
 		)
-		return n_committed
+		return result
 
 	def ingest_sync(self, text: str, source: str = "", descriptor: str = "") -> dict:
-		"""Ingest synchronously. Returns stats dict."""
-		n_committed = self._ingest_sync(text, source, descriptor)
+		"""Ingest synchronously. Returns rich stats dict."""
+		result = self._ingest_sync(text, source, descriptor)
 		return {
-			"committed": n_committed,
+			"committed": len(result.committed),
+			"committed_thoughts": [{"id": t.id, "text": t.text[:200]} for t in result.committed],
+			"rejected_to_limbo": result.rejected,
+			"deduplicated": result.deduplicated,
 			"thoughts": self.graph.num_thoughts,
 			"edges": self.graph.num_edges,
 		}
@@ -267,6 +232,22 @@ class Handler:
 		# Ingest the LLM answer back into the graph so future similar queries
 		# can be answered directly — the learning flywheel.
 		self.enqueue(text, source="query_response")
+
+		# Periodic edge refinement based on retrieval feedback
+		self._retrieval_count += 1
+		if self.cfg.refinement_interval > 0 and self._retrieval_count % self.cfg.refinement_interval == 0:
+			self.graph.refine_edges(
+				boost=self.cfg.refinement_boost,
+				dampen=self.cfg.refinement_dampen,
+				min_traversals=self.cfg.refinement_min_traversals,
+			)
+			for spec in self._specialists.values():
+				spec.graph.refine_edges(
+					boost=self.cfg.refinement_boost,
+					dampen=self.cfg.refinement_dampen,
+					min_traversals=self.cfg.refinement_min_traversals,
+				)
+			log.info("Edge refinement pass completed (retrieval #%d)", self._retrieval_count)
 
 		return text, sources
 
@@ -331,8 +312,8 @@ class Handler:
 		if spec is None:
 			raise KeyError(f"Specialist '{specialist_name}' not loaded")
 		ingester = Ingester(spec.graph, self.provider, self.cfg)
-		committed = ingester.ingest(text, source=source, descriptor=descriptor)
-		return len(committed)
+		result = ingester.ingest(text, source=source, descriptor=descriptor)
+		return len(result.committed)
 
 	def ask_knid(self, query: str, knid: str) -> tuple[str, list[dict]]:
 		"""Ask scoped to all specialists in a knid group."""
@@ -358,7 +339,6 @@ class Handler:
 		relevant_chains = best_chains_from(all_chains, scored)
 
 		return answer(query, scored, self.provider, chains=relevant_chains or None)
-		return answer(query, scored, self.provider)
 
 	def ingested_sources(self) -> set[str]:
 		"""Return the set of all source strings already in the graph and all specialists."""
@@ -386,6 +366,181 @@ class Handler:
 		"""Snapshot of all thoughts as lightweight dicts."""
 		return [{"id": t.id, "text": t.text[:200], "source": t.source} for t in self.graph.thoughts.values()]
 
+	# ---- graph inspection tools ----
+
+	def explore_thought(self, thought_id: int) -> dict | None:
+		"""Return a thought with its edges and neighbors, or None if not found.
+
+		Searches the global graph and all specialists.
+		"""
+		# Search global graph first
+		graph, store = self.graph, "global"
+		thought = graph.thoughts.get(thought_id)
+
+		# If not in global, search specialists
+		if thought is None:
+			for name, spec in self._specialists.items():
+				thought = spec.graph.thoughts.get(thought_id)
+				if thought is not None:
+					graph, store = spec.graph, name
+					break
+
+		if thought is None:
+			return None
+
+		neighbors = graph.get_neighbors(thought_id)
+		edges = []
+		for neighbor_id, edge in neighbors:
+			neighbor = graph.thoughts.get(neighbor_id)
+			edges.append({
+				"target_id": neighbor_id,
+				"target_text": neighbor.text[:200] if neighbor else "",
+				"weight": round(edge.weight, 3),
+				"reasoning": edge.reasoning,
+				"success_rate": round(edge.success_rate, 3),
+				"traversal_count": edge.traversal_count,
+			})
+
+		return {
+			"id": thought.id,
+			"text": thought.text,
+			"source": thought.source,
+			"created_at": thought.created_at,
+			"access_count": thought.access_count,
+			"last_accessed": thought.last_accessed,
+			"store": store,
+			"edges": edges,
+			"neighbor_count": len(edges),
+		}
+
+	def traverse(self, start_id: int, depth: int = 2, max_nodes: int = 50) -> dict | None:
+		"""BFS from a thought, returning the local subgraph.
+
+		Searches across the global graph and all specialists.
+		"""
+		# Find the starting thought and its graph
+		graph, store = self.graph, "global"
+		if start_id not in graph.thoughts:
+			for name, spec in self._specialists.items():
+				if start_id in spec.graph.thoughts:
+					graph, store = spec.graph, name
+					break
+			else:
+				return None
+
+		nodes = []
+		edge_list = []
+		visited: set[int] = set()
+		frontier = [(start_id, 0)]
+		truncated = False
+
+		while frontier:
+			tid, d = frontier.pop(0)
+			if tid in visited:
+				continue
+			if len(visited) >= max_nodes:
+				truncated = True
+				break
+			visited.add(tid)
+
+			thought = graph.thoughts.get(tid)
+			if thought is None:
+				continue
+
+			nodes.append({
+				"id": thought.id,
+				"text": thought.text[:200],
+				"source": thought.source,
+				"store": store,
+				"depth": d,
+			})
+
+			if d < depth:
+				for neighbor_id, edge in graph.get_neighbors(tid):
+					if neighbor_id not in visited:
+						frontier.append((neighbor_id, d + 1))
+					# Record edge (avoid duplicates by canonical ordering)
+					edge_key = (min(edge.source_id, edge.target_id), max(edge.source_id, edge.target_id))
+					edge_entry = {
+						"source_id": edge.source_id,
+						"target_id": edge.target_id,
+						"weight": round(edge.weight, 3),
+						"reasoning": edge.reasoning,
+					}
+					if edge_entry not in edge_list:
+						edge_list.append(edge_entry)
+
+		return {
+			"root": start_id,
+			"store": store,
+			"nodes": nodes,
+			"edges": edge_list,
+			"truncated": truncated,
+		}
+
+	def graph_stats(self) -> dict:
+		"""Aggregate statistics across the global graph and all specialists."""
+		def _edge_stats(edges):
+			if not edges:
+				return 0.0, 0.0
+			weights = [e.weight for e in edges]
+			rates = [e.success_rate for e in edges if e.traversal_count > 0]
+			avg_w = sum(weights) / len(weights)
+			avg_sr = sum(rates) / len(rates) if rates else 0.0
+			return round(avg_w, 3), round(avg_sr, 3)
+
+		avg_w, avg_sr = _edge_stats(self.graph.edges)
+		stats = {
+			"global": {
+				"thoughts": self.graph.num_thoughts,
+				"edges": self.graph.num_edges,
+				"maturity": round(self.graph.maturity, 3),
+				"limbo": len(self.graph.limbo),
+				"purpose": self.graph.purpose or "",
+				"descriptors": len(self.graph.descriptors),
+				"avg_edge_weight": avg_w,
+				"avg_edge_success_rate": avg_sr,
+			},
+			"specialists": [],
+		}
+		for name, entry in self._index.items():
+			spec = self._specialists.get(name)
+			spec_entry = {
+				"name": entry.name,
+				"purpose": entry.purpose,
+				"thoughts": entry.num_thoughts,
+				"edges": entry.num_edges,
+			}
+			if spec:
+				sw, ssr = _edge_stats(spec.graph.edges)
+				spec_entry["maturity"] = round(spec.graph.maturity, 3)
+				spec_entry["avg_edge_weight"] = sw
+				spec_entry["avg_edge_success_rate"] = ssr
+			stats["specialists"].append(spec_entry)
+
+		stats["total_specialists"] = len(self._index)
+		return stats
+
+	def list_specialists(self) -> list[dict]:
+		"""Return metadata for all loaded specialists, including knid membership."""
+		# Build reverse index: store_name → list of knids it belongs to
+		knid_membership: dict[str, list[str]] = {}
+		for knid_name, members in self.registry.knids.items():
+			for member in members:
+				knid_membership.setdefault(member, []).append(knid_name)
+
+		result = []
+		for name, entry in self._index.items():
+			result.append({
+				"name": entry.name,
+				"purpose": entry.purpose,
+				"num_thoughts": entry.num_thoughts,
+				"num_edges": entry.num_edges,
+				"descriptors": entry.descriptors,
+				"knids": knid_membership.get(name, []),
+			})
+		return result
+
 	# ---- event bus (replaces raw-socket pub/sub) ----
 
 	def on(self, event: str, listener: EventListener) -> "Handler":
@@ -409,31 +564,6 @@ class Handler:
 				listener(event)
 			except Exception:
 				log.exception("Event listener raised for kind=%s", event.kind)
-
-	# ---- backward-compatibility shims (deprecated) ----
-	# These delegate to the new names so existing call sites keep working
-	# while we migrate callers. Remove once all callers are updated.
-
-	def handle_ingest(self, text: str, source: str = "", descriptor: str = "") -> dict:
-		return self.ingest_sync(text, source, descriptor)
-
-	def handle_ingest_queued(self, text: str, source: str = "", descriptor: str = "") -> str:
-		return self.ingest(text, source, descriptor)
-
-	def handle_ask(self, query: str) -> tuple[str, list[dict]]:
-		return self.ask(query)
-
-	def handle_status(self) -> str:
-		return self.status()
-
-	def handle_set_purpose(self, purpose: str):
-		return self.set_purpose(purpose)
-
-	def handle_descriptor_add(self, name: str, text: str):
-		return self.add_descriptor(name, text)
-
-	def handle_descriptor_remove(self, name: str) -> bool:
-		return self.remove_descriptor(name)
 
 	# ---- specialist management ----
 

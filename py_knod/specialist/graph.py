@@ -4,6 +4,8 @@ import time
 from dataclasses import dataclass, field
 import numpy as np
 
+from ..util.math import cosine, normalize
+
 
 @dataclass
 class Thought:
@@ -47,6 +49,14 @@ class Edge:
 	embedding: np.ndarray
 	source: str = ""
 	created_at: float = field(default_factory=time.time)
+	traversal_count: int = 0
+	success_count: int = 0
+	last_traversed: float = 0.0
+
+	@property
+	def success_rate(self) -> float:
+		"""Fraction of traversals that led to a thought used in the final answer."""
+		return self.success_count / self.traversal_count if self.traversal_count > 0 else 0.0
 
 	def to_dict(self) -> dict:
 		return {
@@ -57,6 +67,9 @@ class Edge:
 			"embedding": self.embedding,
 			"source": self.source,
 			"created_at": self.created_at,
+			"traversal_count": self.traversal_count,
+			"success_count": self.success_count,
+			"last_traversed": self.last_traversed,
 		}
 
 	@classmethod
@@ -69,6 +82,9 @@ class Edge:
 			embedding=d["embedding"],
 			source=d.get("source", ""),
 			created_at=d.get("created_at", 0.0),
+			traversal_count=d.get("traversal_count", 0),
+			success_count=d.get("success_count", 0),
+			last_traversed=d.get("last_traversed", 0.0),
 		)
 
 
@@ -165,11 +181,9 @@ class Graph:
 	def find_thoughts(self, embedding: np.ndarray, k: int = 5, threshold: float = 0.0) -> list[tuple[Thought, float]]:
 		if not self.thoughts:
 			return []
-		query = embedding / (np.linalg.norm(embedding) + 1e-10)
 		scored = []
 		for t in self.thoughts.values():
-			t_norm = t.embedding / (np.linalg.norm(t.embedding) + 1e-10)
-			sim = float(np.dot(query, t_norm))
+			sim = cosine(embedding, t.embedding)
 			if sim >= threshold:
 				scored.append((t, sim))
 		scored.sort(key=lambda x: x[1], reverse=True)
@@ -178,11 +192,9 @@ class Graph:
 	def find_edges(self, embedding: np.ndarray, k: int = 5, threshold: float = 0.0) -> list[tuple[Edge, float]]:
 		if not self.edges:
 			return []
-		query = embedding / (np.linalg.norm(embedding) + 1e-10)
 		scored = []
 		for e in self.edges:
-			e_norm = e.embedding / (np.linalg.norm(e.embedding) + 1e-10)
-			sim = float(np.dot(query, e_norm)) * 0.8  # edge embedding dampening ×0.8
+			sim = cosine(embedding, e.embedding) * 0.8  # edge embedding dampening x0.8
 			if sim >= threshold:
 				scored.append((e, sim))
 		scored.sort(key=lambda x: x[1], reverse=True)
@@ -235,3 +247,18 @@ class Graph:
 			if e.weight >= min_weight:
 				surviving.append(e)
 		self.edges = surviving
+
+	def refine_edges(self, boost: float = 0.02, dampen: float = 0.01, min_traversals: int = 3):
+		"""Adjust edge weights based on retrieval feedback.
+
+		Edges with high success_rate get a small weight boost.
+		Edges with high traversal but zero success get dampened.
+		Only adjusts edges with at least min_traversals to avoid noise.
+		"""
+		for e in self.edges:
+			if e.traversal_count < min_traversals:
+				continue
+			if e.success_rate > 0.5:
+				e.weight = min(e.weight + boost, 1.0)
+			elif e.success_rate == 0.0:
+				e.weight = max(e.weight - dampen, 0.01)

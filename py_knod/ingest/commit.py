@@ -1,35 +1,23 @@
-"""Phase 4 · Commit — MCMC gate: accept thought + edges, or route to limbo.
-
-Gate logic (matches FLOW.md):
-  - Store immature (maturity == 0)  → Accept unconditionally
-  - Has valid links, store mature   → MCMC gate  p = 0.5^maturity
-    - Passes   → Accept
-    - Rejected → Limbo
-  - No links, store mature          → MCMC gate  p = 0.05^maturity
-    - Passes   → Accept
-    - Rejected → Limbo
-"""
-
 import logging
 import random
 
 from ..specialist.graph import Graph, Thought, LimboThought
+from ..specialist.types import IngestResult
 from .prepare import PreparedArticle
 
 log = logging.getLogger(__name__)
 
 
 def _accept(maturity: float, base: float = 0.05) -> bool:
-	"""MCMC acceptance probability: p = base^maturity."""
 	if maturity <= 0:
 		return True
 	p = base**maturity
 	return random.random() < p
 
 
-def commit(article: PreparedArticle, graph: Graph) -> list[Thought]:
-	"""Phase 4: Insert accepted thoughts + edges; route rejected unlinked thoughts to limbo."""
+def commit(article: PreparedArticle, graph: Graph, deduplicated: int = 0) -> IngestResult:
 	committed = []
+	rejected = 0
 
 	for pt in article.thoughts:
 		has_links = len(pt.links) > 0
@@ -42,6 +30,7 @@ def commit(article: PreparedArticle, graph: Graph) -> list[Thought]:
 					source=pt.source,
 				)
 			)
+			rejected += 1
 			log.debug("Sent to limbo: %s…", pt.text[:60])
 			continue
 		if has_links and not _accept(graph.maturity, base=0.5):
@@ -52,6 +41,7 @@ def commit(article: PreparedArticle, graph: Graph) -> list[Thought]:
 					source=pt.source,
 				)
 			)
+			rejected += 1
 			log.debug("Sent to limbo (linked): %s…", pt.text[:60])
 			continue
 
@@ -71,4 +61,4 @@ def commit(article: PreparedArticle, graph: Graph) -> list[Thought]:
 		committed.append(thought)
 
 	log.info("Committed %d/%d thoughts", len(committed), len(article.thoughts))
-	return committed
+	return IngestResult(committed=committed, rejected=rejected, deduplicated=deduplicated)

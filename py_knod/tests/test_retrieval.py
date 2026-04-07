@@ -22,14 +22,14 @@ TCP_PORT = 7999
 STARTUP_TIMEOUT = 15
 
 QUESTIONS = [
-	"What is a turtle shell made of?",
-	"How do sea turtles navigate across oceans?",
-	"What are the differences between turtles and tortoises?",
-	"Tell me about leatherback sea turtle anatomy",
-	"How do turtles breathe?",
-	"What threats do sea turtles face from human activity?",
-	"What do green sea turtles eat?",
-	"How do hawksbill turtles differ from other species?",
+	"How does a knowledge graph store relationships between concepts?",
+	"What is the role of embeddings in semantic search?",
+	"How does a GNN learn to navigate a graph?",
+	"What is MCMC acceptance gating in knowledge systems?",
+	"How does cosine similarity measure relevance between vectors?",
+	"What is the difference between graph traversal and flat vector search?",
+	"How does a message-passing neural network aggregate neighbor information?",
+	"What are the tradeoffs between specialization and generalization in knowledge stores?",
 ]
 
 

@@ -19,13 +19,13 @@ handler.trainer = GNNTrainer(handler.model, handler.strand, cfg)
 handler.ingester = Ingester(handler.graph, handler.provider, cfg)
 
 # Ingest 4 articles with rich specific facts
-ARTICLES = ["hawksbill.txt", "leatherback.txt", "turtle_excluder.txt", "green_sea_turtle.txt"]
+ARTICLES = ["knowledge_graph.txt", "graph_neural_network.txt", "information_retrieval.txt", "word_embedding.txt"]
 corpus_dir = os.path.join(os.path.dirname(__file__), "corpus")
 
 for fname in ARTICLES:
 	text = open(os.path.join(corpus_dir, fname), encoding="utf-8").read()
 	t0 = time.time()
-	r = handler.handle_ingest(text, source=fname)
+	r = handler.ingest_sync(text, source=fname)
 	print(f"  Ingested {fname}: {r['thoughts']}t / {r['edges']}e  ({time.time() - t0:.0f}s)")
 
 g = handler.graph
@@ -33,16 +33,16 @@ print(f"\n  Store: {g.num_thoughts} thoughts, {g.num_edges} edges, maturity={g.m
 
 # Questions that require specific knowledge from the corpus
 QUESTIONS = [
-	"What is the heaviest hawksbill sea turtle ever recorded?",
-	"How deep can leatherback turtles dive?",
-	"What year did the United States require shrimp trawlers to use turtle excluder devices?",
-	"What is the genus name Eretmochelys derived from?",
-	"How do leatherback turtles survive in cold water?",
+	"How does a knowledge graph differ from a relational database?",
+	"What is message passing in graph neural networks?",
+	"How does TF-IDF weight terms in information retrieval?",
+	"What is the relationship between Word2Vec and word embeddings?",
+	"How do vector databases enable nearest-neighbor search?",
 ]
 
 print("=" * 70)
 for q in QUESTIONS:
-	answer, sources = handler.handle_ask(q)
+	answer, sources = handler.ask(q)
 	print(f"Q: {q}")
 	print(f"A: {answer}\n")
 	for s in sources[:3]:

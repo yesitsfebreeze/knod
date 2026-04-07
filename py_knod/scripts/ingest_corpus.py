@@ -32,7 +32,7 @@ TCP_PORT = 7999
 CORPUS_DIR = "corpus"
 MANIFEST = os.path.join(CORPUS_DIR, "manifest.txt")
 
-DEFAULT_PURPOSE = "specialist in turtles, their anatomy, biology, ecology, and conservation"
+DEFAULT_PURPOSE = "specialist in knowledge graphs, retrieval systems, embeddings, and AI memory architecture"
 
 
 class KnodSession:

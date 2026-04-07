@@ -43,11 +43,13 @@ PathChain
 import heapq
 from dataclasses import dataclass, field
 
+import time as _time
+
 import numpy as np
 
 from ..config import Config
-from ..specialist.graph import Graph, Thought
-from ..specialist.math import cosine
+from ..specialist.graph import Edge, Graph, Thought
+from ..util.math import cosine
 
 
 @dataclass
@@ -57,6 +59,7 @@ class PathChain:
 	steps: list[tuple[Thought, str]] = field(default_factory=list)
 	score: float = 0.0
 	is_target_path: bool = False
+	traversed_edges: list[Edge] = field(default_factory=list)
 
 	@property
 	def terminal(self) -> Thought | None:
@@ -130,11 +133,13 @@ def expand(
 	fan_out_remaining = fan_out
 
 	# Min-heap: (cumulative_cost, depth, current_id, path_steps)
-	# path_steps: list of (thought_id, edge_reasoning)
-	heap: list[tuple[float, int, int, list[tuple[int, str]]]] = []
+	# path_steps: list of (thought_id, edge_reasoning, edge_or_None)
+	heap: list[tuple[float, int, int, list[tuple[int, str, Edge | None]]]] = []
 	for seed_thought, _ in seeds:
-		heap.append((0.0, 0, seed_thought.id, [(seed_thought.id, "")]))
+		heap.append((0.0, 0, seed_thought.id, [(seed_thought.id, "", None)]))
 	heapq.heapify(heap)
+
+	now = _time.time()
 
 	while heap and fan_out_remaining > 0:
 		cum_cost, depth, current_id, path_steps = heapq.heappop(heap)
@@ -175,15 +180,22 @@ def expand(
 			already_visited.add(neighbour_id)
 			fan_out_remaining -= 1
 
-			new_path = path_steps + [(neighbour_id, edge.reasoning)]
+			# Record edge traversal
+			edge.traversal_count += 1
+			edge.last_traversed = now
+
+			new_path = path_steps + [(neighbour_id, edge.reasoning, edge)]
 
 			# Keep best score per thought across all paths
 			if neighbour_id not in result or path_score > result[neighbour_id][1]:
 				result[neighbour_id] = (neighbour, path_score)
+				# Collect all edges traversed in this path
+				path_edges = [e for _, _, e in new_path if e is not None]
 				best_chain[neighbour_id] = PathChain(
-					steps=[(graph.thoughts[sid], rsn) for sid, rsn in new_path if sid in graph.thoughts],
+					steps=[(graph.thoughts[sid], rsn) for sid, rsn, _ in new_path if sid in graph.thoughts],
 					score=path_score,
 					is_target_path=is_target,
+					traversed_edges=path_edges,
 				)
 
 			# Push for further expansion

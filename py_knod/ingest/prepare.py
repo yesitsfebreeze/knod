@@ -1,5 +1,3 @@
-"""Phase 1 · Prepare — decompose raw text into atomic thoughts and embed them (batch)."""
-
 import logging
 from dataclasses import dataclass, field
 
@@ -17,10 +15,8 @@ class PreparedThought:
 	text: str
 	embedding: np.ndarray
 	source: str
-	# Filled during Phase 2 (snapshot)
 	candidate_ids: list[int] = field(default_factory=list)
 	candidate_texts: list[str] = field(default_factory=list)
-	# Filled during Phase 3 (link)
 	links: list[dict] = field(default_factory=list)
 	link_embeddings: list[np.ndarray] = field(default_factory=list)
 
@@ -32,7 +28,6 @@ class PreparedArticle:
 
 
 def prepare(text: str, source: str, descriptor: str, graph: Graph, provider: Provider, cfg: Config) -> PreparedArticle:
-	"""Phase 1: LLM decompose into atomic thoughts + batch embed all thoughts."""
 	descriptors = graph.descriptors if not descriptor else {descriptor: graph.descriptors.get(descriptor, descriptor)}
 
 	thought_texts = provider.decompose_text(text, graph.purpose, descriptors or None)

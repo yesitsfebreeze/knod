@@ -3,7 +3,7 @@
 from .graph import Graph, Thought, Edge, LimboThought
 from .gnn import KnodMPNN, StrandLayer
 from .trainer import GNNTrainer
-from .types import GraphEvent, EventListener, SpecialistIndexEntry, Specialist
+from .types import GraphEvent, EventListener, SpecialistIndexEntry, Specialist, IngestResult
 from .store import (
 	GraphLog,
 	save_graph,
@@ -47,4 +47,5 @@ __all__ = [
 	"save_knod",
 	"load_knod",
 	"read_knod_metadata",
+	"IngestResult",
 ]

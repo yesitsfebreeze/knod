@@ -1,16 +1,3 @@
-"""
-Full integration test: fetch corpus, start knod, ingest, test retrieval.
-
-Orchestrates the three scripts:
-  1. fetch_corpus.py  — download Wikipedia articles to corpus/
-  2. ingest_corpus.py — feed corpus into running knod (multiple passes)
-  3. test_retrieval.py — ask questions, check persistence
-
-Usage: python test.py [--keep] [--passes N]
-  --keep    don't wipe graph data before running
-  --passes  number of corpus passes before running retrieval (default: 3)
-"""
-
 import os
 import socket
 import struct
@@ -25,7 +12,6 @@ TCP_PORT = 7999
 
 
 def _tcp_framed_send(text: str, timeout: float = 10.0) -> str:
-	"""Open a fresh framed TCP session, send one message, return reply."""
 	try:
 		data = text.encode("utf-8")
 		s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

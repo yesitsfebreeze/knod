@@ -58,7 +58,7 @@ except Exception as e:
 	sys.exit(1)
 
 # Set purpose
-r = send_recv(sock, "PURPOSE:turtle specialist smoke test")
+r = send_recv(sock, "PURPOSE:knowledge graph retrieval system smoke test")
 print(f"PURPOSE -> {r.strip()}")
 
 # Use the first available corpus file

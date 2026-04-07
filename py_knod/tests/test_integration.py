@@ -4,6 +4,7 @@ Tests the full pipeline without requiring bin/knod.exe.
 Covers: graph operations, MCMC gate, limbo, registry knids,
 graph limits, edge decay, binary log, status fields, shared base model.
 """
+
 import os
 import tempfile
 import time
@@ -14,10 +15,14 @@ import numpy as np
 from py_knod.config import Config
 from py_knod.specialist.graph import Graph, Thought, Edge, LimboThought
 from py_knod.specialist.store import (
-	save_graph, load_graph,
-	save_model, load_model,
-	save_base_model, load_base_model,
-	save_strand, load_strand,
+	save_graph,
+	load_graph,
+	save_model,
+	load_model,
+	save_base_model,
+	load_base_model,
+	save_strand,
+	load_strand,
 	GraphLog,
 )
 from py_knod.specialist.gnn import KnodMPNN, StrandLayer
@@ -91,6 +96,7 @@ def test_edge_decay():
 def test_mcmc_gate():
 	print("\n=== MCMC Gate ===")
 	from py_knod.ingest.commit import _accept
+
 	# Test _accept at different maturity levels
 	accepted_at_zero = sum(_accept(0.0) for _ in range(100))
 	check(f"maturity=0 always accepts ({accepted_at_zero}/100)", accepted_at_zero == 100)
@@ -197,7 +203,11 @@ def test_registry_knids():
 		cfg.num_layers = 1
 		from py_knod.specialist.store import save_all as _save_all
 
-		for name, purpose in [("turtles", "turtle knowledge"), ("reptiles", "reptile knowledge"), ("marine", "marine biology")]:
+		for name, purpose in [
+			("embeddings", "embedding systems"),
+			("retrieval", "retrieval architecture"),
+			("graph_nav", "graph navigation"),
+		]:
 			g = Graph(name=name, purpose=purpose)
 			m = KnodMPNN(cfg)
 			s = StrandLayer(cfg.hidden_dim)
@@ -209,18 +219,18 @@ def test_registry_knids():
 			reg._append(fpath)
 
 		# Create knids
-		reg.add_to_knid("biology", "turtles")
-		reg.add_to_knid("biology", "reptiles")
-		reg.add_to_knid("ocean", "turtles")
-		reg.add_to_knid("ocean", "marine")
+		reg.add_to_knid("core", "embeddings")
+		reg.add_to_knid("core", "retrieval")
+		reg.add_to_knid("systems", "embeddings")
+		reg.add_to_knid("systems", "graph_nav")
 
-		check("knid 'biology' has 2 members", len(reg.stores_in_knid("biology")) == 2)
-		check("knid 'ocean' has 2 members", len(reg.stores_in_knid("ocean")) == 2)
+		check("knid 'core' has 2 members", len(reg.stores_in_knid("core")) == 2)
+		check("knid 'systems' has 2 members", len(reg.stores_in_knid("systems")) == 2)
 		check("list_knids returns 2", len(reg.list_knids()) == 2)
 
 		# Remove
-		reg.remove_from_knid("biology", "turtles")
-		check("removed from knid", len(reg.stores_in_knid("biology")) == 1)
+		reg.remove_from_knid("core", "embeddings")
+		check("removed from knid", len(reg.stores_in_knid("core")) == 1)
 
 		# Persistence — reload reads .knod metadata for names
 		reg2 = Registry.__new__(Registry)
@@ -230,11 +240,11 @@ def test_registry_knids():
 		reg2._load()
 		check(f"stores persisted ({len(reg2.stores)})", len(reg2.stores) == 3)
 		check(f"knids persisted ({len(reg2.knids)})", len(reg2.knids) == 2)
-		check("biology knid persisted", "reptiles" in reg2.stores_in_knid("biology"))
+		check("core knid persisted", "retrieval" in reg2.stores_in_knid("core"))
 
 		# Unregister removes from knids
-		reg.unregister("marine")
-		check("unregister removes from knid", "marine" not in reg.stores_in_knid("ocean"))
+		reg.unregister("graph_nav")
+		check("unregister removes from knid", "graph_nav" not in reg.stores_in_knid("systems"))
 
 
 # ============================================================
@@ -251,6 +261,7 @@ def test_shared_base_model():
 	# Save base
 	with tempfile.TemporaryDirectory() as tmpdir:
 		import py_knod.specialist.store as store_mod
+
 		orig_path = store_mod._BASE_GNN_PATH
 		store_mod._BASE_GNN_PATH = Path(os.path.join(tmpdir, "base.gnn"))
 		try:
@@ -310,7 +321,7 @@ def test_status_fields():
 		handler._queue = __import__("queue").Queue(maxsize=128)
 		handler._in_flight = __import__("threading").Event()
 
-		status = handler.handle_status()
+		status = handler.status()
 		check("status has queued", "queued=" in status)
 		check("status has in_flight", "in_flight=" in status)
 		check("status has limbo", "limbo=" in status)

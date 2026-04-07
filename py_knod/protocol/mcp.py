@@ -21,31 +21,31 @@ def _mcp(handler: Handler) -> FastMCP:
 	@mcp.tool()
 	def ask(query: str) -> str:
 		"""Ask a question against the knowledge graph. Returns an answer grounded in stored thoughts."""
-		answer, sources = handler.handle_ask(query)
+		answer, sources = handler.ask(query)
 		return json.dumps({"answer": answer, "sources": sources})
 
 	@mcp.tool()
 	def ingest(text: str, source: str = "", descriptor: str = "") -> str:
 		"""Ingest text into the knowledge graph. The text is decomposed into atomic thoughts, linked, and stored."""
-		result = handler.handle_ingest_queued(text, source=source, descriptor=descriptor)
+		result = handler.ingest(text, source=source, descriptor=descriptor)
 		return result
 
 	@mcp.tool()
 	def set_purpose(purpose: str) -> str:
 		"""Set the purpose / focus of the knowledge graph."""
-		handler.handle_set_purpose(purpose)
+		handler.set_purpose(purpose)
 		return f"Purpose set to: {purpose}"
 
 	@mcp.tool()
 	def add_descriptor(name: str, description: str) -> str:
 		"""Add a descriptor (named context hint) to guide future ingestion."""
-		handler.handle_descriptor_add(name, description)
+		handler.add_descriptor(name, description)
 		return f"Descriptor '{name}' added."
 
 	@mcp.tool()
 	def remove_descriptor(name: str) -> str:
 		"""Remove a descriptor by name."""
-		ok = handler.handle_descriptor_remove(name)
+		ok = handler.remove_descriptor(name)
 		return f"Descriptor '{name}' removed." if ok else f"Descriptor '{name}' not found."
 
 	@mcp.tool()
@@ -54,12 +54,44 @@ def _mcp(handler: Handler) -> FastMCP:
 		results = handler.find_thoughts_by_query(query, k=k)
 		return json.dumps(results)
 
+	@mcp.tool()
+	def explore_thought(thought_id: int) -> str:
+		"""Explore a single thought: see its text, edges, neighbors, and reasoning. Returns the thought with all its connections in the graph."""
+		result = handler.explore_thought(thought_id)
+		if result is None:
+			return json.dumps({"error": f"Thought {thought_id} not found"})
+		return json.dumps(result)
+
+	@mcp.tool()
+	def traverse(start_id: int, depth: int = 2, max_nodes: int = 50) -> str:
+		"""Walk the graph from a starting thought via BFS. Returns the local subgraph: nodes, edges, and reasoning chains up to the given depth."""
+		result = handler.traverse(start_id, depth=depth, max_nodes=max_nodes)
+		if result is None:
+			return json.dumps({"error": f"Thought {start_id} not found"})
+		return json.dumps(result)
+
+	@mcp.tool()
+	def graph_stats() -> str:
+		"""Get aggregate statistics for the knowledge graph: thought/edge counts, maturity, limbo size, specialist summaries, and edge quality metrics."""
+		return json.dumps(handler.graph_stats())
+
+	@mcp.tool()
+	def list_specialists() -> str:
+		"""List all loaded specialists with their purpose, thought/edge counts, descriptors, and knid group membership."""
+		return json.dumps(handler.list_specialists())
+
+	@mcp.tool()
+	def ingest_sync(text: str, source: str = "", descriptor: str = "") -> str:
+		"""Ingest text synchronously and return what was created: committed thoughts with IDs, rejection count, and dedup count. Use this instead of ingest when you need to verify what was stored."""
+		result = handler.ingest_sync(text, source=source, descriptor=descriptor)
+		return json.dumps(result)
+
 	# ---- Resources ----
 
 	@mcp.resource("knod://status")
 	def status() -> str:
 		"""Current graph status: thought count, edge count, purpose."""
-		return handler.handle_status()
+		return handler.status()
 
 	@mcp.resource("knod://graph")
 	def graph_info() -> str:
@@ -75,6 +107,16 @@ def _mcp(handler: Handler) -> FastMCP:
 	def list_descriptors() -> str:
 		"""List all descriptors as JSON."""
 		return json.dumps(handler.graph_info["descriptors"])
+
+	@mcp.resource("knod://specialists")
+	def specialists_resource() -> str:
+		"""List all loaded specialists as JSON."""
+		return json.dumps(handler.list_specialists())
+
+	@mcp.resource("knod://stats")
+	def stats_resource() -> str:
+		"""Aggregate graph statistics as JSON."""
+		return json.dumps(handler.graph_stats())
 
 	# ---- Prompts ----
 

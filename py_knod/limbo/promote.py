@@ -22,6 +22,8 @@ from ..registry import store_path
 from ..specialist.graph import Graph, LimboThought
 from ..specialist.gnn import KnodMPNN, StrandLayer
 from ..specialist.store import save_all, load_base_model
+from ..specialist.types import Specialist
+from ..util.math import cosine
 
 log = logging.getLogger(__name__)
 
@@ -114,9 +116,7 @@ def promote_cluster(
 		purpose_emb = provider.embed_text(purpose)
 		for sname, spec in specialists.items():
 			if spec.graph.profile is not None:
-				p_norm = spec.graph.profile / (np.linalg.norm(spec.graph.profile) + 1e-10)
-				q_norm = purpose_emb / (np.linalg.norm(purpose_emb) + 1e-10)
-				sim = float(np.dot(p_norm, q_norm))
+				sim = cosine(spec.graph.profile, purpose_emb)
 				if sim > best_sim:
 					best_sim = sim
 					best_match = sname
@@ -182,8 +182,6 @@ def _spawn_specialist(
 
 	graph_path = str(hashed_path)
 	registry.register(graph_path)
-
-	from ..handler import Specialist
 
 	specialists[name] = Specialist(
 		name=name,

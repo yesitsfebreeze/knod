@@ -50,3 +50,12 @@ class Specialist:
 		self.graph = graph
 		self.model = model
 		self.strand = strand
+
+
+@dataclass
+class IngestResult:
+	"""Rich result from a synchronous ingest operation."""
+
+	committed: list = field(default_factory=list)  # list of Thought objects
+	rejected: int = 0  # sent to limbo
+	deduplicated: int = 0  # merged into existing

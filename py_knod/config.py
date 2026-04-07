@@ -40,6 +40,10 @@ class Config:
 	query_routing_threshold: float = 0.3  # min profile similarity to include specialist in query
 	traversal_depth: int = 2  # max hops in Dijkstra path expansion
 	traversal_fan_out: int = 10  # max new nodes discovered per expand() call
+	refinement_interval: int = 10  # refine edge weights every N retrievals
+	refinement_boost: float = 0.02  # weight boost for high-success edges
+	refinement_dampen: float = 0.01  # weight reduction for zero-success edges
+	refinement_min_traversals: int = 3  # min traversals before refining an edge
 
 	# Server
 	tcp_port: int = 7999

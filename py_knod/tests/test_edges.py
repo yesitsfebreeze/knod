@@ -41,24 +41,24 @@ MODEL_PATH = os.path.join(PROJECT_ROOT, "bin", "data", "test_edges.pt")
 CORPUS_DIR = os.path.join(PROJECT_ROOT, "corpus")
 
 ARTICLES = [
-	"turtle_shell.txt",
-	"green_sea_turtle.txt",
-	"sea_turtle.txt",
-	"tortoise.txt",
-	"leatherback.txt",
-	"hawksbill.txt",
-	"reptile.txt",
+	"knowledge_graph.txt",
+	"graph_neural_network.txt",
+	"word_embedding.txt",
+	"information_retrieval.txt",
+	"semantic_search.txt",
+	"vector_database.txt",
+	"neural_network.txt",
 ]
 
 # Additional articles to ingest on top of base set
 EXTRA_ARTICLES = [
-	"komodo_dragon.txt",
-	"king_cobra.txt",
-	"crocodilian.txt",
-	"chameleon.txt",
-	"galapagos_tortoise.txt",
+	"transformer_model.txt",
+	"attention_mechanism.txt",
+	"markov_chain.txt",
+	"cosine_similarity.txt",
+	"rack_server.txt",
 	# Re-ingest one to test dedup
-	"turtle_shell.txt",
+	"knowledge_graph.txt",
 ]
 
 fresh = "--fresh" in sys.argv
@@ -91,7 +91,7 @@ else:
 		path = os.path.join(CORPUS_DIR, fname)
 		text = open(path, encoding="utf-8").read()
 		t0 = time.time()
-		r = handler.handle_ingest(text, source=fname)
+		r = handler.ingest_sync(text, source=fname)
 		dt = time.time() - t0
 		print(f"  [{i + 1}/{len(ARTICLES)}] {fname}: {r['thoughts']} thoughts, {r['edges']} edges ({dt:.1f}s)")
 
@@ -106,7 +106,7 @@ else:
 
 # === 1b. Ingest extra articles (tests dedup + expansion) ===
 existing_sources = set(t.source for t in handler.graph.thoughts.values())
-extras_to_ingest = [f for f in EXTRA_ARTICLES if f not in existing_sources or f == "turtle_shell.txt"]
+extras_to_ingest = [f for f in EXTRA_ARTICLES if f not in existing_sources or f == "knowledge_graph.txt"]
 if extras_to_ingest:
 	new_extras = [f for f in extras_to_ingest if f not in existing_sources]
 	dupe_extras = [f for f in extras_to_ingest if f in existing_sources]
@@ -117,10 +117,12 @@ if extras_to_ingest:
 			fpath = os.path.join(CORPUS_DIR, fname)
 			text = open(fpath, encoding="utf-8").read()
 			t0 = time.time()
-			r = handler.handle_ingest(text, source=fname)
+			r = handler.ingest_sync(text, source=fname)
 			dt = time.time() - t0
 			label = "(RE-INGEST)" if fname in existing_sources else "(NEW)"
-			print(f"  [{i + 1}/{len(extras_to_ingest)}] {fname} {label}: {r['thoughts']} thoughts, {r['edges']} edges ({dt:.1f}s)")
+			print(
+				f"  [{i + 1}/{len(extras_to_ingest)}] {fname} {label}: {r['thoughts']} thoughts, {r['edges']} edges ({dt:.1f}s)"
+			)
 		after_thoughts = handler.graph.num_thoughts
 		print(f"\n  Before: {before_thoughts} thoughts -> After: {after_thoughts} thoughts")
 		# Save updated graph
@@ -143,27 +145,38 @@ check(f"multiple sources ({len(sources)})", len(sources) >= 3)
 
 # === 3. Ask questions ===
 QUESTIONS = [
-	("What is a turtle shell made of?", ["bone", "keratin", "scute"]),
-	("How do sea turtles navigate?", ["magnet", "current", "ocean", "navigate"]),
-	("What do green sea turtles eat?", ["seagrass", "algae", "herbivor"]),
-	("What is the largest sea turtle species?", ["leatherback"]),
-	("What threats do sea turtles face?", ["poach", "plastic", "habitat", "fish", "trade", "hunt"]),
-	("How big can a Komodo dragon get?", ["meter", "feet", "length", "weigh", "large", "kg", "pound"]),
-	("Is the king cobra venomous?", ["venom", "neurotox", "bite", "poison", "deadly"]),
-	("How do chameleons change color?", ["color", "pigment", "chromatophore", "skin", "cell", "light"]),
-	("Where do Galapagos tortoises live?", ["galapagos", "island", "ecuador", "archipelago"]),
+	("How does a knowledge graph represent relationships?", ["node", "edge", "relation", "triple", "graph", "link"]),
+	("What is the role of embeddings in retrieval systems?", ["vector", "embed", "semantic", "represent", "dimension"]),
+	(
+		"How do graph neural networks propagate information?",
+		["message", "pass", "neighbor", "aggregat", "layer", "propagat"],
+	),
+	("What is cosine similarity used for?", ["similar", "vector", "angle", "distance", "compar"]),
+	(
+		"How does attention work in transformer models?",
+		["attention", "query", "key", "value", "weight", "self-attention"],
+	),
+	("What is a Markov chain Monte Carlo method?", ["markov", "sampl", "distribution", "probabili", "chain", "accept"]),
+	("How do vector databases enable semantic search?", ["vector", "index", "search", "nearest", "embed", "similar"]),
+	(
+		"What are the components of an information retrieval system?",
+		["index", "query", "retriev", "rank", "document", "relevance"],
+	),
+	("How does a rack server architecture work?", ["rack", "server", "unit", "mount", "data center", "power"]),
 ]
 
 print("\n=== Ask Questions (Hybrid Scoring) ===")
 for q, hint_words in QUESTIONS:
-	answer, srcs = handler.handle_ask(q)
+	answer, srcs = handler.ask(q)
 	has_answer = len(answer) > 10
 	# Check if answer touches on expected topic (any hint word appears)
 	answer_lower = answer.lower()
 	relevant = any(w in answer_lower for w in hint_words)
 	print(f"\n  Q: {q}")
 	print(f"  A: {answer}")
-	print(f"  Sources: {', '.join(s.get('source', s.get('text', '')[:30]) if isinstance(s, dict) else s.source for s in srcs[:3])}")
+	print(
+		f"  Sources: {', '.join(s.get('source', s.get('text', '')[:30]) if isinstance(s, dict) else s.source for s in srcs[:3])}"
+	)
 	check(f"got answer ({len(answer)} chars)", has_answer)
 	check(f"answer relevant (contains hint word)", relevant)
 	if not relevant:

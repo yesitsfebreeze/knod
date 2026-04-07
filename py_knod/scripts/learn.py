@@ -1,8 +1,9 @@
 """Continuous learning — fetch Wikipedia articles in our topic area and ingest them.
 
-Picks articles from Wikipedia categories related to reptiles, herpetology, and
-wildlife conservation. Fetches plain text, ingests into the persistent graph,
-and keeps going until stopped (Ctrl-C) or --rounds is exhausted.
+Picks articles from Wikipedia categories related to knowledge graphs, AI,
+retrieval systems, and computing infrastructure. Fetches plain text, ingests
+into the persistent graph, and keeps going until stopped (Ctrl-C) or --rounds
+is exhausted.
 
 Usage:
   python -m py_knod.scripts.learn                # run until Ctrl-C
@@ -29,35 +30,34 @@ from py_knod.handler import Handler
 
 # --- Wikipedia categories to sample from ---
 CATEGORIES = [
-	"Turtles",
-	"Sea_turtles",
-	"Tortoises",
-	"Snakes",
-	"Venomous_snakes",
-	"Lizards",
-	"Geckos",
-	"Crocodilians",
-	"Reptiles",
-	"Herpetology",
-	"Amphibians",
-	"Endangered_reptiles",
-	"Reptile_anatomy",
-	"Animal_scales",
-	"Chelonioidea",
-	"Iguanas",
-	"Monitor_lizards",
-	"Pythons",
-	"Boas",
-	"Vipers",
-	"Frogs",
-	"Salamanders",
-	"Conservation_biology",
-	"Wildlife_conservation",
-	"Endangered_species",
-	"IUCN_Red_List_species",
-	"Tropical_ecology",
-	"Marine_biology",
-	"Island_ecology",
+	"Knowledge_graphs",
+	"Graph_databases",
+	"Semantic_Web",
+	"Knowledge_representation",
+	"Ontology_(information_science)",
+	"Graph_neural_networks",
+	"Artificial_neural_networks",
+	"Deep_learning",
+	"Machine_learning",
+	"Natural_language_processing",
+	"Information_retrieval",
+	"Search_algorithms",
+	"Word_embeddings",
+	"Dimensionality_reduction",
+	"Graph_theory",
+	"Graph_algorithms",
+	"Markov_chain_Monte_Carlo",
+	"Bayesian_statistics",
+	"Data_structures",
+	"Computer_memory",
+	"Cache_(computing)",
+	"Data_centers",
+	"Server_hardware",
+	"Computer_networking",
+	"Application_programming_interfaces",
+	"Distributed_computing",
+	"Database_management_systems",
+	"Recommender_systems",
 ]
 
 GRAPH_DIR = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "..", "bin", "data"))
@@ -77,25 +77,29 @@ def wiki_api(params: dict) -> dict:
 
 def get_category_members(category: str, limit: int = 50) -> list[str]:
 	"""Get article titles from a Wikipedia category."""
-	data = wiki_api({
-		"action": "query",
-		"list": "categorymembers",
-		"cmtitle": f"Category:{category}",
-		"cmtype": "page",
-		"cmlimit": str(limit),
-	})
+	data = wiki_api(
+		{
+			"action": "query",
+			"list": "categorymembers",
+			"cmtitle": f"Category:{category}",
+			"cmtype": "page",
+			"cmlimit": str(limit),
+		}
+	)
 	return [m["title"] for m in data.get("query", {}).get("categorymembers", [])]
 
 
 def get_article_text(title: str) -> str:
 	"""Fetch plain text extract of a Wikipedia article."""
-	data = wiki_api({
-		"action": "query",
-		"titles": title,
-		"prop": "extracts",
-		"explaintext": "1",
-		"exlimit": "1",
-	})
+	data = wiki_api(
+		{
+			"action": "query",
+			"titles": title,
+			"prop": "extracts",
+			"explaintext": "1",
+			"exlimit": "1",
+		}
+	)
 	pages = data.get("query", {}).get("pages", {})
 	for page in pages.values():
 		text = page.get("extract", "")
@@ -131,6 +135,7 @@ def pick_random_article(seen: set[str]) -> tuple[str, str] | None:
 
 def main():
 	import argparse
+
 	parser = argparse.ArgumentParser(description="Continuous Wikipedia learning")
 	parser.add_argument("--rounds", type=int, default=0, help="Number of articles to ingest (0=unlimited)")
 	parser.add_argument("--fresh", action="store_true", help="Start with empty graph")
@@ -182,7 +187,7 @@ def main():
 			before_t = handler.graph.num_thoughts
 			before_e = handler.graph.num_edges
 			t0 = time.time()
-			handler.handle_ingest(text, source=title)
+			handler.ingest_sync(text, source=title)
 			dt = time.time() - t0
 			new_thoughts = handler.graph.num_thoughts - before_t
 			new_edges = handler.graph.num_edges - before_e
