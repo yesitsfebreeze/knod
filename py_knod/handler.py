@@ -184,44 +184,59 @@ class Handler:
 		self.ingest_sync(text, source, descriptor)
 		return "ok"
 
-	def ask(self, query: str) -> tuple[str, list[dict]]:
-		"""Three-stage retrieval: score + expand → deduplicate → rate → answer.
+	def ask(self, query: str, knid: str | None = None) -> tuple[str, list[dict]]:
+		"""Retrieval pipeline: score + expand → deduplicate → rate → answer.
 
-		Stage 1 — Score & expand: merge scoring signals + Dijkstra path traversal.
-		Stage 2 — Deduplicate across specialists.
-		Stage 3 — Rate: re-rank by direct query relevance.
-		Stage 4 — Answer: path-aware context assembly + LLM generation.
+		When `knid` is provided, only specialists in that knid group are queried.
+		Otherwise, the default graph + all registered specialists are queried.
 		"""
 		query_emb = self.provider.embed_text(query)
 
-		# Always include the default graph
-		local_scored, local_chains = self._score_specialist(query_emb, self.graph, self.model, self.strand)
+		all_scored: list[list[tuple]] = []
+		all_chains: list[PathChain] = []
 
-		# Query every specialist
-		all_scored = [local_scored]
-		all_chains: list[PathChain] = list(local_chains)
-		for name, spec in self._specialists.items():
-			if spec.graph.profile is not None:
-				sim = cosine(spec.graph.profile, query_emb)
-				log.debug("Specialist '%s' profile sim=%.3f", name, sim)
-			try:
-				spec_scored, spec_chains = self._score_specialist(query_emb, spec.graph, spec.model, spec.strand)
-				all_scored.append(spec_scored)
-				all_chains.extend(spec_chains)
-			except Exception:
-				log.warning("Specialist '%s' query failed", name, exc_info=True)
+		if knid:
+			# Scoped query: only specialists in this knid
+			store_names = self.registry.stores_in_knid(knid)
+			for sname in store_names:
+				spec = self._specialists.get(sname)
+				if spec is None:
+					continue
+				try:
+					spec_scored, spec_chains = self._score_specialist(query_emb, spec.graph, spec.model, spec.strand)
+					all_scored.append(spec_scored)
+					all_chains.extend(spec_chains)
+				except Exception:
+					log.warning("Specialist '%s' query failed", sname, exc_info=True)
+		else:
+			# Full query: default graph + all specialists
+			local_scored, local_chains = self._score_specialist(query_emb, self.graph, self.model, self.strand)
+			all_scored.append(local_scored)
+			all_chains.extend(local_chains)
+
+			for name, spec in self._specialists.items():
+				if spec.graph.profile is not None:
+					sim = cosine(spec.graph.profile, query_emb)
+					log.debug("Specialist '%s' profile sim=%.3f", name, sim)
+				try:
+					spec_scored, spec_chains = self._score_specialist(query_emb, spec.graph, spec.model, spec.strand)
+					all_scored.append(spec_scored)
+					all_chains.extend(spec_chains)
+				except Exception:
+					log.warning("Specialist '%s' query failed", name, exc_info=True)
 
 		# Deduplicate across specialists
 		scored = deduplicate(all_scored, self.cfg.top_k)
 		if not scored:
 			return "No relevant knowledge found.", []
 
-		# Stage 3: Rate — re-rank thoughts by direct query relevance
+		# Rate — re-rank thoughts by direct query relevance
 		scored = rate_thoughts(query_emb, scored)
 
 		# Filter chains to only those whose terminal thought survived scoring
 		relevant_chains = best_chains_from(all_chains, scored)
 
+		# Confidence gate: skip LLM when the graph already has a strong answer
 		top_score = scored[0][1]
 		if top_score >= self.cfg.confidence_threshold:
 			log.info("Confidence gate: top_score=%.3f >= %.3f, skipping LLM", top_score, self.cfg.confidence_threshold)
@@ -392,14 +407,16 @@ class Handler:
 		edges = []
 		for neighbor_id, edge in neighbors:
 			neighbor = graph.thoughts.get(neighbor_id)
-			edges.append({
-				"target_id": neighbor_id,
-				"target_text": neighbor.text[:200] if neighbor else "",
-				"weight": round(edge.weight, 3),
-				"reasoning": edge.reasoning,
-				"success_rate": round(edge.success_rate, 3),
-				"traversal_count": edge.traversal_count,
-			})
+			edges.append(
+				{
+					"target_id": neighbor_id,
+					"target_text": neighbor.text[:200] if neighbor else "",
+					"weight": round(edge.weight, 3),
+					"reasoning": edge.reasoning,
+					"success_rate": round(edge.success_rate, 3),
+					"traversal_count": edge.traversal_count,
+				}
+			)
 
 		return {
 			"id": thought.id,
@@ -447,13 +464,15 @@ class Handler:
 			if thought is None:
 				continue
 
-			nodes.append({
-				"id": thought.id,
-				"text": thought.text[:200],
-				"source": thought.source,
-				"store": store,
-				"depth": d,
-			})
+			nodes.append(
+				{
+					"id": thought.id,
+					"text": thought.text[:200],
+					"source": thought.source,
+					"store": store,
+					"depth": d,
+				}
+			)
 
 			if d < depth:
 				for neighbor_id, edge in graph.get_neighbors(tid):
@@ -480,6 +499,7 @@ class Handler:
 
 	def graph_stats(self) -> dict:
 		"""Aggregate statistics across the global graph and all specialists."""
+
 		def _edge_stats(edges):
 			if not edges:
 				return 0.0, 0.0
@@ -531,14 +551,16 @@ class Handler:
 
 		result = []
 		for name, entry in self._index.items():
-			result.append({
-				"name": entry.name,
-				"purpose": entry.purpose,
-				"num_thoughts": entry.num_thoughts,
-				"num_edges": entry.num_edges,
-				"descriptors": entry.descriptors,
-				"knids": knid_membership.get(name, []),
-			})
+			result.append(
+				{
+					"name": entry.name,
+					"purpose": entry.purpose,
+					"num_thoughts": entry.num_thoughts,
+					"num_edges": entry.num_edges,
+					"descriptors": entry.descriptors,
+					"knids": knid_membership.get(name, []),
+				}
+			)
 		return result
 
 	# ---- event bus (replaces raw-socket pub/sub) ----
