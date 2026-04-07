@@ -2,7 +2,7 @@ import logging
 
 from ..config import Config
 from ..provider import Provider
-from ..specialist.graph import Graph, Thought
+from ..specialist.graph import Graph
 from ..specialist.types import IngestResult
 from .prepare import prepare
 from .snapshot import snapshot
@@ -11,6 +11,7 @@ from .link import link
 from .commit import commit
 
 log = logging.getLogger(__name__)
+
 
 class Ingester:
 	def __init__(self, graph: Graph, provider: Provider, cfg: Config):

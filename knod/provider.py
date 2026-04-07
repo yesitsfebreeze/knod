@@ -1,11 +1,3 @@
-"""OpenAI API wrapper — embed, decompose, link, answer.
-
-Uses the primary provider (OpenAI) for all calls.  When a chat completion
-hits a rate-limit, timeout, or connection error *and* a local fallback
-(Ollama) is configured, the request is retried against the fallback.
-Embeddings always use the primary provider to keep dimensions consistent.
-"""
-
 import json
 import logging
 import numpy as np
@@ -34,7 +26,6 @@ class Provider:
 			self._fallback_chat_model = ""
 
 	def _chat(self, **kwargs) -> "openai.types.chat.ChatCompletion":
-		"""Try primary client; fall back to local on rate-limit / timeout."""
 		try:
 			return self.client.chat.completions.create(**kwargs)
 		except _FALLBACK_ERRORS as exc:

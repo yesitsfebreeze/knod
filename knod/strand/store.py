@@ -26,7 +26,6 @@ import torch
 
 from .graph import Graph, Thought, Edge, LimboThought
 from .gnn import KnodMPNN, StrandLayer
-from ..util.graph_serde import graph_to_state, graph_from_state
 
 log = logging.getLogger(__name__)
 
@@ -39,109 +38,49 @@ SECTION_MODEL = 0x02
 SECTION_LIMBO = 0x03
 SECTION_REGISTRY = 0x04
 
-# --- Binary log entry types ---
-_LOG_THOUGHT = 1
-_LOG_EDGE = 2
-_LOG_LIMBO = 3
-_LOG_MAGIC = b"KNODLOG1"
+# ---- Per-specialist model checkpoints (.pt) ----
 
 
-class GraphLog:
-	"""Append-only binary log for streaming graph mutations.
-
-	Each entry: [magic(8)] [type(1)] [length(4)] [pickle payload(length)]
-	compact() rewrites the full graph state as a single pickle (the .graph file).
-	"""
-
-	def __init__(self, path: str | Path):
-		self._path = Path(path).with_suffix(".graphlog")
-
-	def append_thought(self, thought: Thought):
-		"""Append a thought entry to the log."""
-		d = thought.to_dict()
-		d["id"] = thought.id  # log entries need the id for replay
-		payload = pickle.dumps(d)
-		self._append(_LOG_THOUGHT, payload)
-
-	def append_edge(self, edge: Edge):
-		"""Append an edge entry to the log."""
-		payload = pickle.dumps(edge.to_dict())
-		self._append(_LOG_EDGE, payload)
-
-	def append_limbo(self, lt: LimboThought):
-		"""Append a limbo thought entry to the log."""
-		payload = pickle.dumps(lt.to_dict())
-		self._append(_LOG_LIMBO, payload)
-
-	def _append(self, entry_type: int, payload: bytes):
-		self._path.parent.mkdir(parents=True, exist_ok=True)
-		with open(self._path, "ab") as f:
-			f.write(_LOG_MAGIC)
-			f.write(struct.pack(">BI", entry_type, len(payload)))
-			f.write(payload)
-
-	def replay(self, graph: Graph):
-		"""Replay log entries into an existing graph (for recovery after crash)."""
-		if not self._path.exists():
-			return
-		with open(self._path, "rb") as f:
-			while True:
-				magic = f.read(8)
-				if len(magic) < 8:
-					break
-				if magic != _LOG_MAGIC:
-					break  # corrupted entry, stop
-				header = f.read(5)
-				if len(header) < 5:
-					break
-				entry_type, length = struct.unpack(">BI", header)
-				payload = f.read(length)
-				if len(payload) < length:
-					break
-				data = pickle.loads(payload)
-				if entry_type == _LOG_THOUGHT:
-					tid = data["id"]
-					if tid not in graph.thoughts:
-						graph.thoughts[tid] = Thought.from_dict(tid, data)
-						graph._next_id = max(graph._next_id, tid + 1)
-				elif entry_type == _LOG_EDGE:
-					graph.edges.append(Edge.from_dict(data))
-				elif entry_type == _LOG_LIMBO:
-					graph.limbo.append(LimboThought.from_dict(data))
-
-	def clear(self):
-		"""Remove the log file (called after compaction)."""
-		if self._path.exists():
-			self._path.unlink()
-
-	@property
-	def exists(self) -> bool:
-		return self._path.exists()
+# --- Graph serialisation helpers ---
 
 
-def save_graph(graph: Graph, path: str | Path):
-	"""Save full graph state as pickle (compaction). Clears the append log."""
-	path = Path(path)
-	path.parent.mkdir(parents=True, exist_ok=True)
+def graph_to_state(graph: Graph, *, include_limbo: bool = False) -> dict:
+	state = {
+		"name": graph.name,
+		"purpose": graph.purpose,
+		"descriptors": graph.descriptors,
+		"next_id": graph._next_id,
+		"profile": graph._profile,
+		"registry_nodes": graph._registry_nodes,
+		"max_thoughts": graph.max_thoughts,
+		"max_edges": graph.max_edges,
+		"thoughts": {tid: t.to_dict() for tid, t in graph.thoughts.items()},
+		"edges": [e.to_dict() for e in graph.edges],
+	}
+	if include_limbo:
+		state["limbo"] = [lt.to_dict() for lt in graph.limbo]
+	return state
 
-	state = graph_to_state(graph, include_limbo=True)
-	with open(path, "wb") as f:
-		pickle.dump(state, f)
-	# Compaction: clear the append log since full state is now on disk
-	GraphLog(path).clear()
 
+def graph_from_state(state: dict, *, maturity_divisor: int = 50) -> Graph:
+	graph = Graph(name=state.get("name", ""), purpose=state["purpose"])
+	graph.descriptors = state.get("descriptors", {})
+	graph._next_id = state["next_id"]
+	graph._profile = state.get("profile")
+	graph._registry_nodes = state.get("registry_nodes", {})
+	graph.max_thoughts = state.get("max_thoughts", 0)
+	graph.max_edges = state.get("max_edges", 0)
+	graph.maturity_divisor = maturity_divisor
 
-def load_graph(path: str | Path) -> Graph:
-	"""Load graph from pickle, then replay any append log entries."""
-	with open(path, "rb") as f:
-		state = pickle.load(f)
+	for tid_str, tdata in state["thoughts"].items():
+		tid = int(tid_str) if isinstance(tid_str, str) else tid_str
+		graph.thoughts[tid] = Thought.from_dict(tid, tdata)
 
-	graph = graph_from_state(state)
+	for edata in state["edges"]:
+		graph.edges.append(Edge.from_dict(edata))
 
-	# Replay any append log entries written since last compaction
-	glog = GraphLog(path)
-	if glog.exists:
-		glog.replay(graph)
+	for ldata in state.get("limbo", []):
+		graph.limbo.append(LimboThought.from_dict(ldata))
 
 	return graph
 
@@ -186,23 +125,6 @@ def load_base_model(model: KnodMPNN) -> bool:
 	return True
 
 
-def save_strand(strand: StrandLayer, path: str | Path):
-	"""Save only the strand layer for a specialist."""
-	path = Path(path)
-	path.parent.mkdir(parents=True, exist_ok=True)
-	torch.save({"strand": strand.state_dict()}, path)
-
-
-def load_strand(strand: StrandLayer, path: str | Path) -> bool:
-	"""Load a strand layer from checkpoint. Returns True if loaded."""
-	path = Path(path)
-	if not path.exists():
-		return False
-	checkpoint = torch.load(path, weights_only=True)
-	strand.load_state_dict(checkpoint["strand"])
-	return True
-
-
 def save_all(graph: Graph, model: KnodMPNN, strand: StrandLayer, base_path: str | Path):
 	"""Save everything to a single base_path.knod file. Also updates shared base."""
 	base = Path(base_path)
@@ -212,31 +134,14 @@ def save_all(graph: Graph, model: KnodMPNN, strand: StrandLayer, base_path: str 
 
 
 def load_all(cfg, base_path: str | Path) -> tuple[Graph, KnodMPNN, StrandLayer]:
-	"""Load from base_path.knod (preferred) or fall back to legacy .graph+.pt files.
-
-	Falls back to shared base.gnn for the model weights if no per-specialist checkpoint exists.
-	"""
+	"""Load graph, model, and strand from base_path.knod."""
 	base = Path(base_path)
 	knod_path = base.with_suffix(".knod")
 
 	if knod_path.exists():
 		return load_knod(cfg, knod_path)
 
-	# Legacy fallback: separate .graph + .pt files
-	graph_path = base.with_suffix(".graph")
-	if graph_path.exists():
-		graph = load_graph(graph_path)
-		graph.maturity_divisor = getattr(cfg, "maturity_divisor", 50)
-		model = KnodMPNN(cfg)
-		strand = StrandLayer(cfg.hidden_dim)
-		pt_path = base.with_suffix(".pt")
-		if pt_path.exists():
-			load_model(model, strand, pt_path)
-		else:
-			load_base_model(model)
-		return graph, model, strand
-
-	raise FileNotFoundError(f"No .knod or .graph file at {base}")
+	raise FileNotFoundError(f"No .knod file at {base}")
 
 
 # --- .knod unified format ---
@@ -311,9 +216,6 @@ def save_knod(graph: Graph, model: KnodMPNN, strand: StrandLayer, path: str | Pa
 		# REGISTRY section (only if non-empty)
 		if graph._registry_nodes:
 			_write_section(f, SECTION_REGISTRY, pickle.dumps(graph._registry_nodes))
-
-	# Clear legacy append log if present
-	GraphLog(path).clear()
 
 
 def load_knod(cfg, path: str | Path) -> tuple[Graph, KnodMPNN, StrandLayer]:

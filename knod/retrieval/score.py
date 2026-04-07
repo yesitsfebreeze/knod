@@ -48,22 +48,13 @@ def gnn_scores(
 	if graph.num_edges == 0:
 		return {}
 
-	ordered_ids = graph.thought_ids_ordered()
-	id_map = graph.id_to_index()
-
 	model.eval()
 	strand.eval()
 
-	node_features = torch.stack([torch.from_numpy(graph.thoughts[tid].embedding) for tid in ordered_ids])
+	node_features, edge_index, edge_features, ordered_ids, valid_edges = graph.to_tensors()
 
-	valid_edges = [e for e in graph.edges if e.source_id in id_map and e.target_id in id_map]
 	if not valid_edges:
 		return {}
-
-	sources = [id_map[e.source_id] for e in valid_edges]
-	targets = [id_map[e.target_id] for e in valid_edges]
-	edge_index = torch.tensor([sources, targets], dtype=torch.long)
-	edge_features = torch.stack([torch.from_numpy(e.embedding) for e in valid_edges])
 
 	# Modulate edge features by success_rate: edges with retrieval feedback
 	# get a small boost (1.0 to 1.5×), preserving dimensionality.

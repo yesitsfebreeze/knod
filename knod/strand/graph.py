@@ -3,8 +3,9 @@
 import time
 from dataclasses import dataclass, field
 import numpy as np
+import torch
 
-from ..util.math import cosine, normalize
+from ..util.math import cosine
 
 
 @dataclass
@@ -209,22 +210,30 @@ class Graph:
 				result.append((e.source_id, e))
 		return result
 
-	def get_adjacency(self) -> tuple[list[list[int]], list[np.ndarray]]:
-		"""Return edge_index [2, E] and edge_attr [E, dim] for PyG."""
-		if not self.edges:
-			return [[], []], []
-		sources, targets, attrs = [], [], []
-		for e in self.edges:
-			sources.append(e.source_id)
-			targets.append(e.target_id)
-			attrs.append(e.embedding)
-		return [sources, targets], attrs
-
 	def thought_ids_ordered(self) -> list[int]:
 		return sorted(self.thoughts.keys())
 
 	def id_to_index(self) -> dict[int, int]:
 		return {tid: i for i, tid in enumerate(self.thought_ids_ordered())}
+
+	def to_tensors(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, list[int], list["Edge"]]:
+		"""Build (node_features, edge_index, edge_features, ordered_ids, valid_edges) tensors.
+
+		Returns torch tensors ready for the GNN forward pass.
+		valid_edges is the filtered edge list (edges whose endpoints exist in the graph).
+		"""
+		ordered_ids = self.thought_ids_ordered()
+		id_map = self.id_to_index()
+
+		node_features = torch.stack([torch.from_numpy(self.thoughts[tid].embedding) for tid in ordered_ids])
+
+		valid_edges = [e for e in self.edges if e.source_id in id_map and e.target_id in id_map]
+		sources = [id_map[e.source_id] for e in valid_edges]
+		targets = [id_map[e.target_id] for e in valid_edges]
+		edge_index = torch.tensor([sources, targets], dtype=torch.long)
+		edge_features = torch.stack([torch.from_numpy(e.embedding) for e in valid_edges])
+
+		return node_features, edge_index, edge_features, ordered_ids, valid_edges
 
 	def _update_profile(self, embedding: np.ndarray):
 		if self._profile is None:

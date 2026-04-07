@@ -2,8 +2,11 @@
 
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from ..handler import Handler
@@ -122,5 +125,21 @@ def http(handler: Handler) -> FastAPI:
 	@app.get("/descriptor/list")
 	def list_descriptors():
 		return {"descriptors": handler.graph_info["descriptors"]}
+
+	@app.get("/graph/full")
+	def graph_full():
+		return handler.graph_full()
+
+	@app.post("/relink")
+	def relink():
+		return handler.relink()
+
+	# Static files (CSS, JS) for the web UI
+	_web_dir = Path(__file__).resolve().parent.parent / "web"
+	app.mount("/static", StaticFiles(directory=str(_web_dir)), name="static")
+
+	@app.get("/viz", response_class=HTMLResponse)
+	def viz():
+		return (_web_dir / "viz.html").read_text(encoding="utf-8")
 
 	return app

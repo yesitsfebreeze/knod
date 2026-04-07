@@ -99,23 +99,10 @@ class GNNTrainer:
 		if graph.num_thoughts < 2 or graph.num_edges == 0:
 			return 0.0
 
-		# Build tensors
-		id_map = graph.id_to_index()
-		ordered_ids = graph.thought_ids_ordered()
+		node_features, edge_index, edge_features, ordered_ids, valid_edges = graph.to_tensors()
 
-		node_features = torch.stack([torch.from_numpy(graph.thoughts[tid].embedding) for tid in ordered_ids])
-
-		sources = [id_map[e.source_id] for e in graph.edges if e.source_id in id_map and e.target_id in id_map]
-		targets = [id_map[e.target_id] for e in graph.edges if e.source_id in id_map and e.target_id in id_map]
-		edge_features_list = [
-			torch.from_numpy(e.embedding) for e in graph.edges if e.source_id in id_map and e.target_id in id_map
-		]
-
-		if not sources:
+		if len(valid_edges) == 0:
 			return 0.0
-
-		edge_index = torch.tensor([sources, targets], dtype=torch.long)
-		edge_features = torch.stack(edge_features_list)
 
 		steps = self.adaptive_steps(graph.num_thoughts)
 		total_loss = 0.0

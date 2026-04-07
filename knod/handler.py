@@ -10,22 +10,12 @@ import numpy as np
 
 from .config import Config
 from .provider import Provider
-from .registry import Registry
-from .specialist import (
-	Graph,
-	KnodMPNN,
-	StrandLayer,
-	GNNTrainer,
-	GraphEvent,
-	EventListener,
-	SpecialistIndexEntry,
-	Specialist,
-	IngestResult,
-	save_all,
-	load_all,
-	load_base_model,
-	read_knod_metadata,
-)
+from .registry import Registry, store_path
+from .specialist.graph import Graph, Thought
+from .specialist.gnn import KnodMPNN, StrandLayer
+from .specialist.trainer import GNNTrainer
+from .specialist.types import GraphEvent, EventListener, SpecialistIndexEntry, Specialist, IngestResult
+from .specialist.store import save_all, load_all, load_base_model, read_knod_metadata
 from .util.math import cosine
 from .ingest import Ingester
 from .limbo import find_clusters, promote_cluster
@@ -73,10 +63,10 @@ class Handler:
 
 	def init(self):
 		base = Path(self.cfg.graph_path).with_suffix("")
-		graph_file = base.with_suffix(".graph")
+		knod_file = base.with_suffix(".knod")
 
-		if graph_file.exists():
-			log.info("Loading existing graph from %s", graph_file)
+		if knod_file.exists():
+			log.info("Loading existing graph from %s", knod_file)
 			self.graph, self.model, self.strand = load_all(self.cfg, base)
 		else:
 			log.info("Creating new graph")
@@ -315,6 +305,32 @@ class Handler:
 		"""Resolve a descriptor name to its text. Returns '' if not found."""
 		return self.graph.descriptors.get(name, "")
 
+	def create_specialist(self, name: str, purpose: str, location: str, knid: str | None = None) -> str:
+		"""Create a new specialist graph, save it, and register it.
+
+		Returns the graph file path.
+		"""
+		hashed = store_path(location, name)
+		base = hashed.with_suffix("")
+
+		graph = Graph(
+			name=name,
+			purpose=purpose,
+			max_thoughts=self.cfg.max_thoughts,
+			max_edges=self.cfg.max_edges,
+		)
+		model = KnodMPNN(self.cfg)
+		strand = StrandLayer(self.cfg.hidden_dim)
+		save_all(graph, model, strand, base)
+
+		graph_path = str(hashed)
+		self.registry.register(graph_path)
+
+		if knid:
+			self.registry.add_to_knid(knid, name)
+
+		return graph_path
+
 	def ingest_into_specialist(
 		self,
 		specialist_name: str,
@@ -329,31 +345,6 @@ class Handler:
 		ingester = Ingester(spec.graph, self.provider, self.cfg)
 		result = ingester.ingest(text, source=source, descriptor=descriptor)
 		return len(result.committed)
-
-	def ask_knid(self, query: str, knid: str) -> tuple[str, list[dict]]:
-		"""Ask scoped to all specialists in a knid group."""
-		store_names = self.registry.stores_in_knid(knid)
-		query_emb = self.provider.embed_text(query)
-		all_scored = []
-		all_chains: list[PathChain] = []
-		for sname in store_names:
-			spec = self._specialists.get(sname)
-			if spec is None:
-				continue
-			spec_scored, spec_chains = self._score_specialist(query_emb, spec.graph, spec.model, spec.strand)
-			all_scored.append(spec_scored)
-			all_chains.extend(spec_chains)
-		scored = deduplicate(all_scored, self.cfg.top_k)
-		if not scored:
-			return "No relevant knowledge found in knid.", []
-
-		# Rate — re-rank thoughts by direct query relevance (parity with ask())
-		scored = rate_thoughts(query_emb, scored)
-
-		# Filter chains to only those whose terminal thought survived scoring
-		relevant_chains = best_chains_from(all_chains, scored)
-
-		return answer(query, scored, self.provider, chains=relevant_chains or None)
 
 	def ingested_sources(self) -> set[str]:
 		"""Return the set of all source strings already in the graph and all specialists."""
@@ -380,6 +371,201 @@ class Handler:
 	def all_thoughts(self) -> list[dict]:
 		"""Snapshot of all thoughts as lightweight dicts."""
 		return [{"id": t.id, "text": t.text[:200], "source": t.source} for t in self.graph.thoughts.values()]
+
+	def graph_full(self) -> dict:
+		"""Return complete graph as nodes + edges for visualization."""
+		nodes = []
+		edges = []
+		seen_edge_keys: set[tuple[str, str]] = set()
+
+		def _collect(graph, store: str):
+			prefix = "" if store == "global" else f"{store}:"
+			for t in graph.thoughts.values():
+				nodes.append(
+					{
+						"key": f"{prefix}{t.id}",
+						"label": t.text[:80],
+						"source": t.source,
+						"store": store,
+						"access_count": t.access_count,
+						"created_at": t.created_at,
+					}
+				)
+			for e in graph.edges:
+				key = (f"{prefix}{e.source_id}", f"{prefix}{e.target_id}")
+				if key in seen_edge_keys:
+					continue
+				seen_edge_keys.add(key)
+				edges.append(
+					{
+						"source": f"{prefix}{e.source_id}",
+						"target": f"{prefix}{e.target_id}",
+						"weight": round(e.weight, 3),
+						"reasoning": e.reasoning[:120],
+						"success_rate": round(e.success_rate, 3),
+					}
+				)
+
+		_collect(self.graph, "global")
+		for name, spec in self._specialists.items():
+			_collect(spec.graph, name)
+
+		# Add specialist hub nodes and link each specialist's thoughts to it
+		for name, spec in self._specialists.items():
+			hub_key = f"_spec:{name}"
+			nodes.append(
+				{
+					"key": hub_key,
+					"label": name,
+					"source": "",
+					"store": name,
+					"type": "specialist",
+					"access_count": 0,
+					"created_at": 0,
+				}
+			)
+			for t in spec.graph.thoughts.values():
+				edge_key = (hub_key, f"{name}:{t.id}")
+				if edge_key not in seen_edge_keys:
+					seen_edge_keys.add(edge_key)
+					edges.append(
+						{
+							"source": hub_key,
+							"target": f"{name}:{t.id}",
+							"weight": 0.3,
+							"reasoning": f"belongs to {name}",
+							"success_rate": 0.0,
+						}
+					)
+
+		# Compute k-nearest-neighbor edges based on embedding cosine similarity
+		knn_edges = []
+		# Collect all thoughts with their embeddings and prefixed keys
+		all_thoughts = []
+		def _collect_thoughts(graph, store: str):
+			prefix = "" if store == "global" else f"{store}:"
+			for t in graph.thoughts.values():
+				if t.embedding is not None and len(t.embedding) > 0:
+					all_thoughts.append((f"{prefix}{t.id}", t.embedding))
+		_collect_thoughts(self.graph, "global")
+		for name, spec in self._specialists.items():
+			_collect_thoughts(spec.graph, name)
+
+		if len(all_thoughts) > 1:
+			from .util.math import cosine
+			k = min(3, len(all_thoughts) - 1)
+			for i, (key_i, emb_i) in enumerate(all_thoughts):
+				sims = []
+				for j, (key_j, emb_j) in enumerate(all_thoughts):
+					if i == j:
+						continue
+					sims.append((cosine(emb_i, emb_j), key_j))
+				sims.sort(key=lambda x: -x[0])
+				for sim, key_j in sims[:k]:
+					edge_key = (key_i, key_j)
+					rev_key = (key_j, key_i)
+					if edge_key not in seen_edge_keys and rev_key not in seen_edge_keys:
+						seen_edge_keys.add(edge_key)
+						knn_edges.append({
+							"source": key_i,
+							"target": key_j,
+							"weight": round(max(0.0, sim), 3),
+							"reasoning": "embedding similarity",
+							"success_rate": 0.0,
+							"type": "knn",
+						})
+
+		return {"nodes": nodes, "edges": edges, "knn_edges": knn_edges}
+
+	# ---- relink / backfill ----
+
+	def relink(self) -> dict:
+		"""Scan all thoughts and create missing edges between similar pairs.
+
+		Works on the global graph and all specialists. Uses the LLM to
+		generate link reasoning for newly discovered connections.
+		"""
+		total_created = 0
+		total_scanned = 0
+
+		def _relink_graph(graph: Graph) -> int:
+			nonlocal total_scanned
+			created = 0
+			thoughts = list(graph.thoughts.values())
+			if len(thoughts) < 2:
+				return 0
+
+			# Build set of existing edge pairs for fast lookup
+			existing: set[tuple[int, int]] = set()
+			for e in graph.edges:
+				existing.add((e.source_id, e.target_id))
+				existing.add((e.target_id, e.source_id))
+
+			# Find similar pairs that aren't connected
+			pairs_to_link: list[tuple[Thought, Thought, float]] = []
+			for i, a in enumerate(thoughts):
+				for b in thoughts[i + 1 :]:
+					total_scanned += 1
+					if (a.id, b.id) in existing:
+						continue
+					sim = cosine(a.embedding, b.embedding)
+					if sim >= self.cfg.similarity_threshold:
+						pairs_to_link.append((a, b, sim))
+
+			if not pairs_to_link:
+				return 0
+
+			# Batch LLM link reasoning — group by source thought
+			from collections import defaultdict
+
+			groups: dict[int, list[tuple[Thought, float]]] = defaultdict(list)
+			src_map: dict[int, Thought] = {}
+			for a, b, sim in pairs_to_link:
+				groups[a.id].append((b, sim))
+				src_map[a.id] = a
+
+			for src_id, candidates in groups.items():
+				src = src_map[src_id]
+				cand_texts = [c.text for c, _ in candidates]
+				cand_thoughts = [c for c, _ in candidates]
+
+				results = self.provider.batch_link_reason(src.text, cand_texts)
+				valid = [r for r in results if r["weight"] >= self.cfg.min_link_weight and 0 <= r["index"] < len(cand_thoughts)]
+				if not valid:
+					continue
+
+				reasoning_texts = [r["reasoning"] for r in valid]
+				embeddings = self.provider.embed_texts(reasoning_texts)
+
+				for r, emb in zip(valid, embeddings):
+					target = cand_thoughts[r["index"]]
+					edge = graph.add_edge(
+						source_id=src.id,
+						target_id=target.id,
+						weight=r["weight"],
+						reasoning=r["reasoning"],
+						embedding=emb,
+					)
+					if edge is not None:
+						created += 1
+
+			return created
+
+		with self.mu:
+			total_created += _relink_graph(self.graph)
+			for name, spec in self._specialists.items():
+				total_created += _relink_graph(spec.graph)
+
+			if total_created > 0:
+				self.save()
+
+		log.info("Relink: created %d edges (scanned %d pairs)", total_created, total_scanned)
+		return {
+			"edges_created": total_created,
+			"pairs_scanned": total_scanned,
+			"total_edges": self.graph.num_edges,
+			"total_thoughts": self.graph.num_thoughts,
+		}
 
 	# ---- graph inspection tools ----
 

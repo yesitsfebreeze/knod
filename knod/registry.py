@@ -14,7 +14,6 @@ def store_path(store_dir: str | Path, name: str) -> Path:
 
 
 class Registry:
-
 	def __init__(self):
 		self._path = Path.home() / ".config" / "knod" / "stores"
 		self.stores: dict[str, dict[str, str]] = {}  # name → {"path", "purpose"}
@@ -23,7 +22,8 @@ class Registry:
 
 	def _read_metadata(self, path: str) -> dict | None:
 		try:
-			from .specialist import read_knod_metadata
+			from .specialist.store import read_knod_metadata
+
 			meta = read_knod_metadata(path)
 			return meta
 		except Exception:
@@ -156,6 +156,7 @@ class Registry:
 
 	def migrate_to_hashed(self):
 		import re
+
 		migrated = 0
 		for name, entry in list(self.stores.items()):
 			old = Path(entry["path"])
@@ -172,8 +173,8 @@ class Registry:
 			# Rename the main .knod file
 			old.rename(new)
 			entry["path"] = str(new)
-			# Rename companion files (.graphlog, legacy .graph, .pt)
-			for suffix in (".graphlog", ".graph", ".pt"):
+			# Rename companion files (.pt)
+			for suffix in (".pt",):
 				companion = old.with_suffix(suffix)
 				if companion.exists():
 					companion.rename(new.with_suffix(suffix))

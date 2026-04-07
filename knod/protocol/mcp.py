@@ -86,6 +86,12 @@ def _mcp(handler: Handler) -> FastMCP:
 		result = handler.ingest_sync(text, source=source, descriptor=descriptor)
 		return json.dumps(result)
 
+	@mcp.tool()
+	def relink() -> str:
+		"""Scan all existing thoughts and create missing edges between similar pairs. Use this after bulk ingestion to ensure the graph is fully connected."""
+		result = handler.relink()
+		return json.dumps(result)
+
 	# ---- Resources ----
 
 	@mcp.resource("knod://status")

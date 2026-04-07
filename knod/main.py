@@ -55,7 +55,7 @@ def main():
 
 	# register — register an existing graph file
 	register_cmd = sub.add_parser("register", help="Register an existing graph file")
-	register_cmd.add_argument("path", type=str, help="Path to .graph file")
+	register_cmd.add_argument("path", type=str, help="Path to .knod file")
 	register_cmd.add_argument("--knid", type=str, default=None, help="Add to knid group")
 
 	# list — list registered stores
@@ -247,10 +247,7 @@ def _do_ingest_file(cfg: Config, filepath: str, descriptor: str = "", knid: str 
 def _do_ask(cfg: Config, query: str, knid: str | None = None):
 	handler = _load_handler(cfg)
 
-	if knid:
-		answer, sources = handler.ask_knid(query, knid)
-	else:
-		answer, sources = handler.ask(query)
+	answer, sources = handler.ask(query, knid=knid)
 
 	print(f"\n{answer}\n")
 	print("--- Sources ---")
@@ -262,9 +259,9 @@ def _do_ask(cfg: Config, query: str, knid: str | None = None):
 
 def _do_explore(cfg: Config):
 	base = Path(cfg.graph_path).with_suffix("")
-	graph_file = base.with_suffix(".graph")
+	knod_file = base.with_suffix(".knod")
 
-	if not graph_file.exists():
+	if not knod_file.exists():
 		print("No graph found.")
 		return
 
@@ -318,9 +315,6 @@ def _do_ingest_corpus(cfg: Config, corpus_dir: str):
 
 def _do_new(cfg: Config, knid: str | None = None):
 	"""Interactive: create a new specialist graph."""
-	from .registry import Registry, store_path
-	from .specialist import Graph, KnodMPNN, StrandLayer, save_all
-
 	purpose = input("Purpose: ").strip()
 	if not purpose:
 		print("Purpose is required.")
@@ -335,29 +329,20 @@ def _do_new(cfg: Config, knid: str | None = None):
 	if not location:
 		location = str(Path.cwd())
 
-	hashed = store_path(location, name)
-	base = hashed.with_suffix("")
-
-	graph = Graph(name=name, purpose=purpose, max_thoughts=cfg.max_thoughts, max_edges=cfg.max_edges)
-	model = KnodMPNN(cfg)
-	strand = StrandLayer(cfg.hidden_dim)
-	save_all(graph, model, strand, base)
-
-	registry = Registry()
-	graph_path = str(hashed)
-	registry.register(graph_path)
+	handler = _load_handler(cfg)
+	graph_path = handler.create_specialist(name, purpose, location, knid=knid)
 
 	if knid:
-		registry.add_to_knid(knid, name)
 		print(f"Added to knid '{knid}'")
 
 	print(f"Created specialist '{name}' at {graph_path}")
+	handler.shutdown()
 
 
 def _do_register(cfg: Config, path: str, knid: str | None = None):
 	"""Register an existing graph file."""
 	from .registry import Registry
-	from .specialist import read_knod_metadata
+	from .specialist.store import read_knod_metadata
 
 	graph_path = Path(path)
 	if not graph_path.exists():
