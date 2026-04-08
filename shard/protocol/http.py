@@ -114,8 +114,8 @@ class ChatToolHandler:
 	def graph_stats(self) -> dict:
 		return self._handler.graph_stats()
 
-	def list_strands(self) -> dict:
-		return {"strands": self._handler.list_strands()}
+	def list_Shards(self) -> dict:
+		return {"Shards": self._handler.list_Shards()}
 
 	def ingest_sync(self, text: str, source: str = "", descriptor: str = "") -> dict:
 		return self._handler.ingest_sync(text, source=source, descriptor=descriptor)
@@ -153,9 +153,9 @@ def http(handler: Handler) -> FastAPI:
 	def stats():
 		return handler.graph_stats()
 
-	@app.get("/strands")
-	def strands():
-		return handler.list_strands()
+	@app.get("/Shards")
+	def Shards():
+		return handler.list_Shards()
 
 	@app.get("/thought/{thought_id}")
 	def get_thought(thought_id: int):

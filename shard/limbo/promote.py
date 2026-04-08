@@ -1,14 +1,14 @@
-"""Limbo promote — route a cluster to an existing strand or spawn a new one.
+"""Limbo promote — route a cluster to an existing Shard or spawn a new one.
 
 Matches FLOW.md LIMBO subgraph:
   LB_NM  — LLM: name + describe the cluster
   LB_EP  — Embed cluster purpose
-  LB_MAT — Existing strand profile match ≥ strand_match_threshold?
-  LB_PRO — Promote to matching strand
-  LB_NEW — Spawn new strand
+  LB_MAT — Existing Shard profile match ≥ Shard_match_threshold?
+  LB_PRO — Promote to matching Shard
+  LB_NEW — Spawn new Shard
 
 After promotion or spawn, runs Phase 3 (link) + GNN training so the
-strand starts with proper edges and trained weights.
+Shard starts with proper edges and trained weights.
 """
 
 import logging
@@ -19,10 +19,10 @@ import numpy as np
 from ..config import Config
 from ..provider import Provider
 from ..registry import Registry, store_path
-from ..strand.graph import Graph, LimboThought
-from ..strand.gnn import ShardMPNN, StrandLayer
-from ..strand.store import save_all, load_base_model
-from ..strand.types import Strand
+from ..Shard.graph import Graph, LimboThought
+from ..Shard.gnn import ShardMPNN, ShardLayer
+from ..Shard.store import save_all, load_base_model
+from ..Shard.types import Shard
 from ..util.math import cosine
 
 log = logging.getLogger(__name__)
@@ -32,13 +32,13 @@ def bootstrap_thoughts(
 	thought_ids: list[int],
 	graph: Graph,
 	model: ShardMPNN,
-	strand: StrandLayer,
+	Shard: ShardLayer,
 	provider: Provider,
 	cfg: Config,
 ):
 	"""Link a set of thoughts to their neighbors in the graph and train GNN.
 
-	Called after spawning a new strand or promoting thoughts to an existing one.
+	Called after spawning a new Shard or promoting thoughts to an existing one.
 	Runs Phase 3 (link reasoning) on the given thoughts, adds edges, then trains.
 	"""
 	if len(thought_ids) < 2 or graph.num_thoughts < 2:
@@ -84,26 +84,26 @@ def bootstrap_thoughts(
 	log.info("Bootstrap: added %d edges for %d thoughts", edges_added, len(prepared))
 
 	if graph.num_edges > 0:
-		from ..strand.trainer import GNNTrainer
+		from ..Shard.trainer import GNNTrainer
 
 		# Load latest shared base weights before training (bidirectional sync)
 		load_base_model(model)
-		trainer = GNNTrainer(model, strand, cfg)
+		trainer = GNNTrainer(model, Shard, cfg)
 		loss = trainer.train_on_graph(graph)
 		log.info("Bootstrap GNN training loss: %.4f", loss)
 
 
 def promote_cluster(
 	cluster: list[LimboThought],
-	strands: dict[str, Strand],
+	Shards: dict[str, Shard],
 	provider: Provider,
 	cfg: Config,
 	registry: Registry,
 	graph_base_path: str,
 ) -> str | None:
-	"""Promote a limbo cluster: try existing strand, else spawn new one.
+	"""Promote a limbo cluster: try existing Shard, else spawn new one.
 
-	Returns the strand name the cluster was promoted into (or None on error).
+	Returns the Shard name the cluster was promoted into (or None on error).
 	After promotion, runs bootstrap (Phase 3 + GNN training) and saves.
 	"""
 	texts = [lt.text for lt in cluster]
@@ -112,56 +112,56 @@ def promote_cluster(
 	best_match = None
 	best_sim = 0.0
 
-	if strands:
+	if Shards:
 		purpose_emb = provider.embed_text(purpose)
-		for sname, strand in strands.items():
-			if strand.graph.profile is not None:
-				sim = cosine(strand.graph.profile, purpose_emb)
+		for sname, Shard in Shards.items():
+			if Shard.graph.profile is not None:
+				sim = cosine(Shard.graph.profile, purpose_emb)
 				if sim > best_sim:
 					best_sim = sim
 					best_match = sname
 
-	if best_match and best_sim >= cfg.strand_match_threshold:
-		strand = strands[best_match]
+	if best_match and best_sim >= cfg.Shard_match_threshold:
+		Shard = Shards[best_match]
 		new_ids = []
 		for lt in cluster:
-			t = strand.graph.add_thought(lt.text, lt.embedding, lt.source)
+			t = Shard.graph.add_thought(lt.text, lt.embedding, lt.source)
 			if t:
 				new_ids.append(t.id)
 		# Bootstrap: link + train
-		bootstrap_thoughts(new_ids, strand.graph, strand.model, strand.strand, provider, cfg)
-		# Refine existing edges in the target strand (re-evaluate based on new content)
-		strand.graph.refine_edges(
+		bootstrap_thoughts(new_ids, Shard.graph, Shard.model, Shard.Shard, provider, cfg)
+		# Refine existing edges in the target Shard (re-evaluate based on new content)
+		Shard.graph.refine_edges(
 			boost=cfg.refinement_boost,
 			dampen=cfg.refinement_dampen,
 			min_traversals=1,
 		)
-		# Save strand
+		# Save Shard
 		graph_path = registry.stores[best_match]["path"]
 		base = Path(graph_path).with_suffix("")
-		save_all(strand.graph, strand.model, strand.strand, base)
+		save_all(Shard.graph, Shard.model, Shard.Shard, base)
 		log.info(
-			"Promoted %d limbo thoughts to strand '%s' (refined %d edges)", len(cluster), best_match, strand.graph.num_edges
+			"Promoted %d limbo thoughts to Shard '%s' (refined %d edges)", len(cluster), best_match, Shard.graph.num_edges
 		)
 		return best_match
 	else:
-		return _spawn_strand(name, purpose, cluster, strands, provider, cfg, registry, graph_base_path)
+		return _spawn_Shard(name, purpose, cluster, Shards, provider, cfg, registry, graph_base_path)
 
 
-def _spawn_strand(
+def _spawn_Shard(
 	name: str,
 	purpose: str,
 	cluster: list[LimboThought],
-	strands: dict[str, Strand],
+	Shards: dict[str, Shard],
 	provider: Provider,
 	cfg: Config,
 	registry: Registry,
 	graph_base_path: str,
 ) -> str:
-	"""Create a new strand graph from a limbo cluster, link thoughts, and train."""
-	from ..strand.graph import Graph as StrandGraph
+	"""Create a new Shard graph from a limbo cluster, link thoughts, and train."""
+	from ..Shard.graph import Graph as ShardGraph
 
-	graph = StrandGraph(
+	graph = ShardGraph(
 		name=name,
 		purpose=purpose,
 		max_thoughts=cfg.max_thoughts,
@@ -169,9 +169,9 @@ def _spawn_strand(
 		maturity_divisor=cfg.maturity_divisor,
 	)
 	model = ShardMPNN(cfg)
-	strand = StrandLayer(cfg.hidden_dim)
+	Shard = ShardLayer(cfg.hidden_dim)
 
-	# Inherit global base weights so the strand starts with global knowledge
+	# Inherit global base weights so the Shard starts with global knowledge
 	load_base_model(model)
 
 	new_ids = []
@@ -181,22 +181,22 @@ def _spawn_strand(
 			new_ids.append(t.id)
 
 	# Bootstrap: link between cluster thoughts + train GNN
-	bootstrap_thoughts(new_ids, graph, model, strand, provider, cfg)
+	bootstrap_thoughts(new_ids, graph, model, Shard, provider, cfg)
 
 	store_dir = Path(graph_base_path).with_suffix("").parent
 	hashed_path = store_path(store_dir, name)
 	base = hashed_path.with_suffix("")
-	save_all(graph, model, strand, base)
+	save_all(graph, model, Shard, base)
 
 	graph_path = str(hashed_path)
 	registry.register(graph_path)
 
-	strands[name] = Strand(
+	Shards[name] = Shard(
 		name=name,
 		purpose=purpose,
 		graph=graph,
 		model=model,
-		strand=strand,
+		Shard=Shard,
 	)
-	log.info("Spawned new strand '%s' with %d thoughts, %d edges", name, len(cluster), graph.num_edges)
+	log.info("Spawned new Shard '%s' with %d thoughts, %d edges", name, len(cluster), graph.num_edges)
 	return name

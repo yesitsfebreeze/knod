@@ -10,7 +10,7 @@
 
 Section tags:
   0x01 GRAPH    — pickled graph state dict
-  0x02 MODEL    — torch.save bytes (model + strand state_dict)
+  0x02 MODEL    — torch.save bytes (model + Shard state_dict)
   0x03 LIMBO    — pickled limbo list
   0x04 REGISTRY — pickled registry nodes dict
 """
@@ -25,7 +25,7 @@ from pathlib import Path
 import torch
 
 from .graph import Graph, Thought, Edge, LimboThought
-from .gnn import ShardMPNN, StrandLayer
+from .gnn import ShardMPNN, ShardLayer
 
 log = logging.getLogger(__name__)
 
@@ -38,7 +38,7 @@ SECTION_MODEL = 0x02
 SECTION_LIMBO = 0x03
 SECTION_REGISTRY = 0x04
 
-# ---- Per-strand model checkpoints (.pt) ----
+# ---- Per-Shard model checkpoints (.pt) ----
 
 
 # --- Graph serialisation helpers ---
@@ -85,24 +85,24 @@ def graph_from_state(state: dict, *, maturity_divisor: int = 50) -> Graph:
 	return graph
 
 
-def save_model(model: ShardMPNN, strand: StrandLayer, path: str | Path):
-	"""Save model + strand checkpoint (per-strand .pt file)."""
+def save_model(model: ShardMPNN, Shard: ShardLayer, path: str | Path):
+	"""Save model + Shard checkpoint (per-Shard .pt file)."""
 	path = Path(path)
 	path.parent.mkdir(parents=True, exist_ok=True)
 	torch.save(
 		{
 			"model": model.state_dict(),
-			"strand": strand.state_dict(),
+			"Shard": Shard.state_dict(),
 		},
 		path,
 	)
 
 
-def load_model(model: ShardMPNN, strand: StrandLayer, path: str | Path):
-	"""Load model + strand checkpoint."""
+def load_model(model: ShardMPNN, Shard: ShardLayer, path: str | Path):
+	"""Load model + Shard checkpoint."""
 	checkpoint = torch.load(path, weights_only=True)
 	model.load_state_dict(checkpoint["model"])
-	strand.load_state_dict(checkpoint["strand"])
+	Shard.load_state_dict(checkpoint["Shard"])
 
 
 # ---- Shared base GNN checkpoint ----
@@ -114,11 +114,11 @@ def _get_base_gnn_path(cfg) -> Path:
 	return Path(cfg.base_gnn_path) if cfg.base_gnn_path else _DEFAULT_BASE_GNN_PATH
 
 
-def extract_routing_from_strand(graph, model, strand) -> dict:
-	"""Extract routing knowledge from a trained strand.
+def extract_routing_from_Shard(graph, model, Shard) -> dict:
+	"""Extract routing knowledge from a trained Shard.
 
 	Returns a dict with:
-	- strand_profiles: list of (profile_embedding, strand_name)
+	- Shard_profiles: list of (profile_embedding, Shard_name)
 	- high_weight_edges: list of (source_profile, target_profile, weight)
 	- node_hidden_avg: average hidden representation from the GNN
 	"""
@@ -140,16 +140,16 @@ def extract_routing_from_strand(graph, model, strand) -> dict:
 		e = F.relu(model.edge_proj(edge_features))
 		for layer in model.layers:
 			h = layer(h, edge_index, e)
-		h_strand, _ = strand(h, edge_index)
+		h_Shard, _ = Shard(h, edge_index)
 
 	routing = {
-		"strand_profiles": [],
+		"Shard_profiles": [],
 		"high_weight_edges": [],
-		"node_hidden_avg": h_strand.mean(dim=0).cpu().numpy().tolist(),
+		"node_hidden_avg": h_Shard.mean(dim=0).cpu().numpy().tolist(),
 	}
 
 	if graph.profile is not None:
-		routing["strand_profiles"].append((graph.profile.tolist(), graph.name or "unknown"))
+		routing["Shard_profiles"].append((graph.profile.tolist(), graph.name or "unknown"))
 
 	for e in graph.edges:
 		if e.weight >= 0.7:
@@ -162,9 +162,9 @@ def extract_routing_from_strand(graph, model, strand) -> dict:
 
 
 def merge_routing_into_base(model, routing: dict):
-	"""Merge strand routing knowledge into the base model.
+	"""Merge Shard routing knowledge into the base model.
 
-	Adds synthetic routing nodes to the base that encode strand profiles
+	Adds synthetic routing nodes to the base that encode Shard profiles
 	and high-weight edge patterns. This helps the base learn navigation.
 	"""
 	import torch
@@ -173,13 +173,13 @@ def merge_routing_into_base(model, routing: dict):
 	if not routing:
 		return
 
-	if "strand_profiles" in routing and "node_hidden_avg" in routing:
+	if "Shard_profiles" in routing and "node_hidden_avg" in routing:
 		avg_hidden = torch.tensor(routing["node_hidden_avg"], dtype=torch.float)
 		hidden_dim = model.hidden_dim
 		embed_dim = model.embedding_dim
 
 		with torch.no_grad():
-			for profile, name in routing["strand_profiles"]:
+			for profile, name in routing["Shard_profiles"]:
 				profile_tensor = torch.tensor(profile, dtype=torch.float)
 				if profile_tensor.shape[0] != embed_dim:
 					continue
@@ -222,16 +222,16 @@ def load_base_model(model: ShardMPNN, cfg=None) -> bool:
 	return True
 
 
-def save_all(graph: Graph, model: ShardMPNN, strand: StrandLayer, base_path: str | Path):
+def save_all(graph: Graph, model: ShardMPNN, Shard: ShardLayer, base_path: str | Path):
 	"""Save everything to a single base_path.shard file. Also updates shared base."""
 	base = Path(base_path)
-	save_shard(graph, model, strand, base.with_suffix(".shard"))
+	save_shard(graph, model, Shard, base.with_suffix(".shard"))
 	# Update the shared base model
 	save_base_model(model)
 
 
-def load_all(cfg, base_path: str | Path) -> tuple[Graph, ShardMPNN, StrandLayer]:
-	"""Load graph, model, and strand from base_path.shard."""
+def load_all(cfg, base_path: str | Path) -> tuple[Graph, ShardMPNN, ShardLayer]:
+	"""Load graph, model, and Shard from base_path.shard."""
 	base = Path(base_path)
 	shard_path = base.with_suffix(".shard")
 
@@ -282,14 +282,14 @@ def _parse_shard_sections(data: bytes) -> list[tuple[int, bytes]]:
 	return sections
 
 
-def _model_bytes(model: ShardMPNN, strand: StrandLayer) -> bytes:
-	"""Serialize model + strand state_dict to bytes via torch.save."""
+def _model_bytes(model: ShardMPNN, Shard: ShardLayer) -> bytes:
+	"""Serialize model + Shard state_dict to bytes via torch.save."""
 	buf = io.BytesIO()
-	torch.save({"model": model.state_dict(), "strand": strand.state_dict()}, buf)
+	torch.save({"model": model.state_dict(), "Shard": Shard.state_dict()}, buf)
 	return buf.getvalue()
 
 
-def save_shard(graph: Graph, model: ShardMPNN, strand: StrandLayer, path: str | Path):
+def save_shard(graph: Graph, model: ShardMPNN, Shard: ShardLayer, path: str | Path):
 	"""Save graph + model + limbo + registry into a single .shard file."""
 	path = Path(path)
 	path.parent.mkdir(parents=True, exist_ok=True)
@@ -303,7 +303,7 @@ def save_shard(graph: Graph, model: ShardMPNN, strand: StrandLayer, path: str | 
 		_write_section(f, SECTION_GRAPH, pickle.dumps(graph_to_state(graph)))
 
 		# MODEL section
-		_write_section(f, SECTION_MODEL, _model_bytes(model, strand))
+		_write_section(f, SECTION_MODEL, _model_bytes(model, Shard))
 
 		# LIMBO section (only if non-empty)
 		if graph.limbo:
@@ -315,14 +315,14 @@ def save_shard(graph: Graph, model: ShardMPNN, strand: StrandLayer, path: str | 
 			_write_section(f, SECTION_REGISTRY, pickle.dumps(graph._registry_nodes))
 
 
-def load_shard(cfg, path: str | Path, warm_start: bool = True) -> tuple[Graph, ShardMPNN, StrandLayer]:
+def load_shard(cfg, path: str | Path, warm_start: bool = True) -> tuple[Graph, ShardMPNN, ShardLayer]:
 	"""Load graph + model + limbo from a single .shard file.
 
 	Args:
 		cfg: Config object
 		path: Path to .shard file
 		warm_start: If True, first load base model weights, then override with
-		            strand-specific weights. This gives strands cross-strand navigation
+		            Shard-specific weights. This gives Shards cross-Shard navigation
 		            knowledge from the shared base.
 	"""
 	path = Path(path)
@@ -363,9 +363,9 @@ def load_shard(cfg, path: str | Path, warm_start: bool = True) -> tuple[Graph, S
 
 	# Reconstruct model
 	model = ShardMPNN(cfg)
-	strand = StrandLayer(cfg.hidden_dim)
+	Shard = ShardLayer(cfg.hidden_dim)
 
-	# Warm start: load base model first for cross-strand navigation knowledge
+	# Warm start: load base model first for cross-Shard navigation knowledge
 	if warm_start:
 		load_base_model(model, cfg)
 
@@ -373,11 +373,11 @@ def load_shard(cfg, path: str | Path, warm_start: bool = True) -> tuple[Graph, S
 		buf = io.BytesIO(model_bytes)
 		checkpoint = torch.load(buf, weights_only=True)
 		model.load_state_dict(checkpoint["model"])
-		strand.load_state_dict(checkpoint["strand"])
+		Shard.load_state_dict(checkpoint["Shard"])
 	elif not warm_start:
 		load_base_model(model)
 
-	return graph, model, strand
+	return graph, model, Shard
 
 
 def read_shard_metadata(path: str | Path) -> dict:

@@ -1,4 +1,4 @@
-"""RETRIEVAL — fan-out across all strands, merge signals, generate answer.
+"""RETRIEVAL — fan-out across all Shards, merge signals, generate answer.
 
 score.py  — Q_S1 GNN, Q_S2 cosine, Q_S3 edge scoring
 merge.py  — Q_WGT adaptive weights, Q_BST access boost, Q_DED dedup

@@ -28,10 +28,10 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger("integration")
 
 from shard.config import Config
-from shard.strand.graph import Graph
-from shard.strand.gnn import ShardMPNN, StrandLayer
-from shard.strand.trainer import GNNTrainer
-from shard.strand.store import save_shard, load_shard
+from shard.Shard.graph import Graph
+from shard.Shard.gnn import ShardMPNN, ShardLayer
+from shard.Shard.trainer import GNNTrainer
+from shard.Shard.store import save_shard, load_shard
 from shard.ingest import Ingester
 from shard.handler import Handler
 
@@ -156,8 +156,8 @@ def setup_handler(cfg: Config, graph_path: str, fresh: bool) -> Handler:
 
 	if not fresh and os.path.exists(graph_path):
 		print("\n=== Loading Persisted Graph ===")
-		handler.graph, handler.model, handler.strand = load_shard(cfg, graph_path)
-		handler.trainer = GNNTrainer(handler.model, handler.strand, cfg)
+		handler.graph, handler.model, handler.Shard = load_shard(cfg, graph_path)
+		handler.trainer = GNNTrainer(handler.model, handler.Shard, cfg)
 		handler.ingester = Ingester(handler.graph, handler.provider, cfg)
 		g = handler.graph
 		print(f"  Loaded: {g.num_thoughts} thoughts, {g.num_edges} edges, maturity={g.maturity:.3f}")
@@ -169,8 +169,8 @@ def setup_handler(cfg: Config, graph_path: str, fresh: bool) -> Handler:
 			maturity_divisor=cfg.maturity_divisor,
 		)
 		handler.model = ShardMPNN(cfg)
-		handler.strand = StrandLayer(cfg.hidden_dim)
-		handler.trainer = GNNTrainer(handler.model, handler.strand, cfg)
+		handler.Shard = ShardLayer(cfg.hidden_dim)
+		handler.trainer = GNNTrainer(handler.model, handler.Shard, cfg)
 		handler.ingester = Ingester(handler.graph, handler.provider, cfg)
 
 	return handler
@@ -203,10 +203,10 @@ def test_graph_structure(handler: Handler) -> None:
 
 
 def test_gnn_trained(handler: Handler) -> None:
-	"""Verify the GNN model and strand layer exist and were trained."""
+	"""Verify the GNN model and Shard layer exist and were trained."""
 	print("\n=== GNN Training ===")
 	check("model exists", handler.model is not None)
-	check("strand exists", handler.strand is not None)
+	check("Shard exists", handler.Shard is not None)
 
 	# Train explicitly and verify loss is finite
 	if handler.graph.num_edges > 0:
@@ -265,7 +265,7 @@ def test_persistence(handler: Handler, cfg: Config, graph_path: str) -> None:
 	print("\n=== Persistence ===")
 
 	# Save
-	save_shard(handler.graph, handler.model, handler.strand, graph_path)
+	save_shard(handler.graph, handler.model, handler.Shard, graph_path)
 	check("save_shard succeeded", os.path.exists(graph_path))
 
 	# Reload
@@ -278,7 +278,7 @@ def test_persistence(handler: Handler, cfg: Config, graph_path: str) -> None:
 	handler2 = Handler(cfg)
 	handler2.graph = g2
 	handler2.model = m2
-	handler2.strand = s2
+	handler2.Shard = s2
 	handler2.trainer = GNNTrainer(m2, s2, cfg)
 	handler2.ingester = Ingester(g2, handler2.provider, cfg)
 

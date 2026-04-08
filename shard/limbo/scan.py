@@ -9,7 +9,7 @@ import logging
 import numpy as np
 
 from ..config import Config
-from ..strand.graph import Graph
+from ..Shard.graph import Graph
 
 log = logging.getLogger(__name__)
 

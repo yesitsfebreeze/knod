@@ -1,8 +1,8 @@
 import logging
 import random
 
-from ..strand.graph import Graph, Thought, LimboThought
-from ..strand.types import IngestResult
+from ..Shard.graph import Graph, Thought, LimboThought
+from ..Shard.types import IngestResult
 from .prepare import PreparedArticle
 
 log = logging.getLogger(__name__)

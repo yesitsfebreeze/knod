@@ -1,7 +1,7 @@
 """LIMBO — background scan every 60 s.
 
 Rejected thoughts (no links + mature store) accumulate here.
-Periodically clustered; clusters are promoted to existing or new strands.
+Periodically clustered; clusters are promoted to existing or new Shards.
 """
 
 from .scan import find_clusters

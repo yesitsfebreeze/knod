@@ -144,8 +144,8 @@ TOOL_DEFINITIONS = [
 	{
 		"type": "function",
 		"function": {
-			"name": "list_strands",
-			"description": "List all loaded strands with their purpose, counts, and descriptors.",
+			"name": "list_Shards",
+			"description": "List all loaded Shards with their purpose, counts, and descriptors.",
 			"parameters": {
 				"type": "object",
 				"properties": {},

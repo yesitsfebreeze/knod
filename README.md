@@ -26,7 +26,7 @@ query → embed → GNN scores + cosine search + edge search → merge → exter
 4. External LLM batch-evaluates link weights and reasoning for candidates.
 5. MCMC acceptance gate: early on, all thoughts are kept (exploration). As the graph matures toward a configured threshold, unconnected thoughts are increasingly rejected (specialization). Acceptance follows exponential decay: `1.0 * 0.05^maturity`.
 6. Accepted thoughts are added to the graph with edges above the min link weight.
-7. Rejected thoughts go to a limbo graph (if enabled) for potential strand promotion.
+7. Rejected thoughts go to a limbo graph (if enabled) for potential shard promotion.
 8. GNN retrains on the updated graph. Checkpoint saved.
 
 ### Retrieval
@@ -44,11 +44,11 @@ When a question is asked:
 
 ### Multi-Store Queries
 
-`shard ask` spawns subprocesses — one per registered strand graph. Each subprocess loads its graph, runs cosine similarity search, and returns scored results via stdout. The parent process merges, deduplicates, ranks, and calls the LLM for the final answer.
+`shard ask` spawns subprocesses — one per registered shard graph. Each subprocess loads its graph, runs cosine similarity search, and returns scored results via stdout. The parent process merges, deduplicates, ranks, and calls the LLM for the final answer.
 
-### Limbo & Strand Promotion
+### Limbo & Shard Promotion
 
-Thoughts rejected by the MCMC gate are stored in a limbo graph. A background scan (every 60s) checks for clusters that exceed `limbo_cluster_min`. When a cluster is large enough, the external LLM suggests a name and purpose, and the cluster can be promoted to a new strand store.
+Thoughts rejected by the MCMC gate are stored in a limbo graph. A background scan (every 60s) checks for clusters that exceed `limbo_cluster_min`. When a cluster is large enough, the external LLM suggests a name and purpose, and the cluster can be promoted to a new Shard store.
 
 ## Modules
 
@@ -59,9 +59,9 @@ Thoughts rejected by the MCMC gate are stored in a limbo graph. A background sca
 | `provider/` | External LLM interface — OpenAI implementation with embedding, chat, decomposition, evaluation, linking, answer generation |
 | `ingest/` | Ingestion pipeline — decompose, embed, link, MCMC gate, limbo routing, cluster scanning |
 | `protocol/` | Request handling — TCP (prefix-based commands) and HTTP (REST API, background thread) |
-| `registry/` | Strand store management — INI-format store/knid registry at `~/.config/shard/stores` |
+| `registry/` | Shard store management — INI-format store/cluster registry at `~/.config/shard/stores` |
 | `config/` | Configuration — INI parsing from `~/.config/shard/config`, defaults for all parameters |
-| `cli/` | CLI subcommands — `new`, `register`, `list`, `knid`, `ask` |
+| `cli/` | CLI subcommands — `new`, `register`, `list`, `cluster`, `ask` |
 | `logger/` | Multi-channel file logging — shard.log, performance.log, error.log with rotation |
 | `repl/` | Interactive REPL — non-blocking stdin polling with command dispatch |
 | `http/` | Bundled HTTP server library — routing, request parsing, response building |
@@ -97,13 +97,13 @@ similarity_threshold = 0.7
 
 ```sh
 shard                        # start main process (TCP + HTTP + REPL)
-shard new                    # create a new strand store
+shard new                    # create a new Shard store
 shard register <path>        # register an existing graph file
 shard list                   # list all stores
-shard list --knid=<name>     # list stores in a knowledge cluster
-shard knid ...               # manage knowledge clusters
+shard list --cluster=<name>     # list stores in a knowledge cluster
+shard cluster ...               # manage knowledge clusters
 shard ask <query>            # query across all stores (subprocess per store)
-shard ask --knid=<name> <q>  # query within a specific cluster
+shard ask --cluster=<name> <q>  # query within a specific cluster
 ```
 
 ### TCP Commands
@@ -165,5 +165,5 @@ All embeddings stored as `[1536]f32`. Strings as length-prefixed byte arrays.
 - **Thoughts are atomic.** One idea per node. Small nodes enable precise retrieval.
 - **Hybrid by design.** Local GNN for fast navigation, external LLM for reasoning. Neither is optional.
 - **MCMC drives specialization.** Acceptance gating — not pruning — shapes what a graph keeps.
-- **One executable, many strands.** Single binary, one store per graph file, subprocess-based fan-out for queries.
+- **One executable, many Shards.** Single binary, one store per graph file, subprocess-based fan-out for queries.
 - **Simple persistence.** Binary files, no database.

@@ -4,24 +4,24 @@ import torch
 import torch.nn.functional as F
 
 from ..config import Config
-from .gnn import ShardMPNN, StrandLayer
+from .gnn import ShardMPNN, ShardLayer
 
 
 class GNNTrainer:
 	"""Training loop with edge masking, link prediction, and adaptive LR.
 
 	Retrained async after each commit (SP_GRAPH → SP_GNN in the flow).
-	Base MPNN uses a fixed low LR (1e-5); StrandLayer uses adaptive LR.
+	Base MPNN uses a fixed low LR (1e-5); ShardLayer uses adaptive LR.
 	"""
 
-	def __init__(self, model: ShardMPNN, strand: StrandLayer, cfg: Config):
+	def __init__(self, model: ShardMPNN, Shard: ShardLayer, cfg: Config):
 		self.model = model
-		self.strand = strand
+		self.Shard = Shard
 		self.cfg = cfg
 		self.optimizer = torch.optim.AdamW(
 			[
 				{"params": list(model.parameters()), "lr": 1e-5},  # base: fixed low LR
-				{"params": list(strand.parameters()), "lr": cfg.lr_max},  # strand: adaptive LR
+				{"params": list(Shard.parameters()), "lr": cfg.lr_max},  # Shard: adaptive LR
 			],
 			betas=(0.9, 0.999),
 			weight_decay=cfg.weight_decay,
@@ -39,9 +39,9 @@ class GNNTrainer:
 	def train_step(self, node_features, edge_index, edge_features, num_thoughts: int):
 		"""One training step with edge masking + link prediction loss."""
 		self.model.train()
-		self.strand.train()
+		self.Shard.train()
 
-		# Adaptive LR: only strand group (index 1) adapts; base (index 0) stays at 1e-5
+		# Adaptive LR: only Shard group (index 1) adapts; base (index 0) stays at 1e-5
 		lr = self.adaptive_lr(num_thoughts)
 		self.optimizer.param_groups[1]["lr"] = lr
 
@@ -60,7 +60,7 @@ class GNNTrainer:
 
 		# Forward with visible edges
 		hidden, scores = self.model(node_features, visible_edge_index, visible_edge_features)
-		hidden, scores = self.strand(hidden, visible_edge_index)
+		hidden, scores = self.Shard(hidden, visible_edge_index)
 
 		# Link prediction loss: masked edges should score high
 		masked_src = edge_index[0, mask_indices]
@@ -83,7 +83,7 @@ class GNNTrainer:
 		self.optimizer.zero_grad()
 		loss.backward()
 		torch.nn.utils.clip_grad_norm_(
-			list(self.model.parameters()) + list(self.strand.parameters()),
+			list(self.model.parameters()) + list(self.Shard.parameters()),
 			max_norm=1.0,
 		)
 		self.optimizer.step()
@@ -97,7 +97,7 @@ class GNNTrainer:
 		for the caller to extract and merge into the base model.
 		"""
 		from .graph import Graph
-		from .store import extract_routing_from_strand
+		from .store import extract_routing_from_Shard
 
 		assert isinstance(graph, Graph)
 
@@ -116,7 +116,7 @@ class GNNTrainer:
 		for _ in range(steps):
 			total_loss += self.train_step(node_features, edge_index, edge_features, graph.num_thoughts)
 
-		self.last_routing = extract_routing_from_strand(graph, self.model, self.strand)
+		self.last_routing = extract_routing_from_Shard(graph, self.model, self.Shard)
 
 		return total_loss / steps
 

@@ -283,8 +283,8 @@ const EDGE_MARKER_MIN_FOCUS_ALPHA = 0.26;
 const EDGE_MARKER_HOVER_BOOST = 0.18;
 const SETTINGS_STORAGE_KEY = "shard.viz.settings.v1";
 const EDGE_MARKER_T = 0.62;
-const STRAND_RING_RADIUS = POLY_R * 1.36;
-const STRAND_INNER_PULL = 0.72;
+const Shard_RING_RADIUS = POLY_R * 1.36;
+const Shard_INNER_PULL = 0.72;
 const THOUGHT_SPIRAL_RADIUS = POLY_R * 0.28;
 const GLOBAL_SPIRAL_RADIUS = POLY_R * 0.22;
 const SPIRAL_TURN_BASE = 1.15;
@@ -938,7 +938,7 @@ function isSpecialistNode(raw) {
 	return source.startsWith("specialist:") || label.includes("[specialist:");
 }
 function getNodeTypeLabel(node) {
-	return node?.kind === "tag" ? "strand" : "thought";
+	return node?.kind === "tag" ? "Shard" : "thought";
 }
 function getNodeIconGlyph(node) {
 	return node?.kind === "tag" ? "●" : "■";
@@ -971,7 +971,7 @@ function getNodePrimitiveRadius(n, visualScale = 1) {
 	return Math.max(radius, floor) * visualScale;
 }
 function getNodeIconMarkup(node) {
-	const kind = node?.kind === "tag" ? "strand" : "thought";
+	const kind = node?.kind === "tag" ? "Shard" : "thought";
 	return `<span class="list-icon list-icon-${kind}" aria-hidden="true">${getNodeIconGlyph(node)}</span>`;
 }
 function getEdgeIconMarkup() {
@@ -1286,10 +1286,10 @@ function updateDimensionDrivenState() {
 function applyImportanceLayout(tagPos, angleOf) {
 	const orderedTags = sortNodesForSpiral(tagNodes);
 	const tagSpan = getSpiralHeightSpan() * 0.58;
-	const strandMinY = -tagSpan * 0.5;
-	const strandMaxY = tagSpan * 0.5;
-	let minStrandY = Infinity;
-	let maxStrandY = -Infinity;
+	const ShardMinY = -tagSpan * 0.5;
+	const ShardMaxY = tagSpan * 0.5;
+	let minShardY = Infinity;
+	let maxShardY = -Infinity;
 
 	for (let i = 0; i < orderedTags.length; i++) {
 		const n = orderedTags[i];
@@ -1297,22 +1297,22 @@ function applyImportanceLayout(tagPos, angleOf) {
 		const angleT = orderedTags.length <= 1 ? 0.5 : i / orderedTags.length;
 		const angle = -Math.PI * 0.5 + angleT * Math.PI * 2;
 		const sphereScale = getSpiralSphereScale(rankT);
-		const strandRadius = STRAND_RING_RADIUS * sphereScale;
+		const ShardRadius = Shard_RING_RADIUS * sphereScale;
 		const basePos = [
-			strandRadius * Math.cos(angle),
+			ShardRadius * Math.cos(angle),
 			(rankT - 0.5) * tagSpan,
-			strandRadius * Math.sin(angle),
+			ShardRadius * Math.sin(angle),
 		];
-		n.pos = scalePositionFromCenter(twistPositionByHeight(basePos, strandMinY, strandMaxY));
+		n.pos = scalePositionFromCenter(twistPositionByHeight(basePos, ShardMinY, ShardMaxY));
 		tagPos[n.label] = basePos;
 		angleOf[n.label] = angle;
-		minStrandY = Math.min(minStrandY, basePos[1]);
-		maxStrandY = Math.max(maxStrandY, basePos[1]);
+		minShardY = Math.min(minShardY, basePos[1]);
+		maxShardY = Math.max(maxShardY, basePos[1]);
 	}
 
-	if (!Number.isFinite(minStrandY) || !Number.isFinite(maxStrandY)) {
-		minStrandY = -tagSpan * 0.5;
-		maxStrandY = tagSpan * 0.5;
+	if (!Number.isFinite(minShardY) || !Number.isFinite(maxShardY)) {
+		minShardY = -tagSpan * 0.5;
+		maxShardY = tagSpan * 0.5;
 	}
 
 	if (!thoughtNodes.length) return;
@@ -1338,7 +1338,7 @@ function applyImportanceLayout(tagPos, angleOf) {
 		const tagAnchor = isGlobal ? [0, 0, 0] : (tagPos[storeKey] || [0, 0, 0]);
 		const center = isGlobal
 			? [0, 0, 0]
-			: [tagAnchor[0] * STRAND_INNER_PULL, tagAnchor[1] * 0.82, tagAnchor[2] * STRAND_INNER_PULL];
+			: [tagAnchor[0] * Shard_INNER_PULL, tagAnchor[1] * 0.82, tagAnchor[2] * Shard_INNER_PULL];
 		const radialDir = [Math.cos(anchorAngle), 0, Math.sin(anchorAngle)];
 		const tangentDir = [-radialDir[2], 0, radialDir[0]];
 		const radius = isGlobal ? GLOBAL_SPIRAL_RADIUS : THOUGHT_SPIRAL_RADIUS;
@@ -1372,17 +1372,17 @@ function applyImportanceLayout(tagPos, angleOf) {
 		rawThoughtMaxY = Math.max(rawThoughtMaxY, entry.basePos[1]);
 	}
 
-	const strandMidY = (minStrandY + maxStrandY) * 0.5;
+	const ShardMidY = (minShardY + maxShardY) * 0.5;
 	const thoughtMidY = Number.isFinite(rawThoughtMinY) && Number.isFinite(rawThoughtMaxY)
 		? (rawThoughtMinY + rawThoughtMaxY) * 0.5
-		: strandMidY;
+		: ShardMidY;
 
 	for (const entry of pendingThoughtPositions) {
 		const normalizedY = rawThoughtMaxY - rawThoughtMinY > 1e-6
-			? lerp(minStrandY, maxStrandY, invLerp(rawThoughtMinY, rawThoughtMaxY, entry.basePos[1]))
-			: strandMidY;
+			? lerp(minShardY, maxShardY, invLerp(rawThoughtMinY, rawThoughtMaxY, entry.basePos[1]))
+			: ShardMidY;
 		entry.basePos[1] = normalizedY;
-		entry.node.pos = scalePositionFromCenter(twistPositionByHeight(entry.basePos, minStrandY, maxStrandY));
+		entry.node.pos = scalePositionFromCenter(twistPositionByHeight(entry.basePos, minShardY, maxShardY));
 	}
 }
 
@@ -1639,18 +1639,18 @@ function layout(data) {
 	allNodes = []; tagNodes = []; thoughtNodes = []; edges = [];
 	nodeIdx = {}; nbrs = {}; edgeAdj = {}; storeClr = {}; clrI = 0;
 
-	const strands = [...data.nodes.filter(n => n.type === "strand")]
+	const Shards = [...data.nodes.filter(n => n.type === "Shard")]
 		.sort((a, b) => String(a.label || a.key).localeCompare(String(b.label || b.key)));
-	const rest = [...data.nodes.filter(n => n.type !== "strand")]
+	const rest = [...data.nodes.filter(n => n.type !== "Shard")]
 		.sort((a, b) => String(a.key).localeCompare(String(b.key)));
-	const N = strands.length, angleOf = {}, tagPos = {};
+	const N = Shards.length, angleOf = {}, tagPos = {};
 	layoutState = { tagPos, angleOf };
 	const now = Date.now() / 1000;
 
-	strands.forEach((s, i) => {
+	Shards.forEach((s, i) => {
 		const a = (2 * Math.PI * i) / Math.max(N, 1);
 		angleOf[s.label] = a;
-		tagPos[s.label] = [STRAND_RING_RADIUS * Math.cos(a), 0, STRAND_RING_RADIUS * Math.sin(a)];
+		tagPos[s.label] = [Shard_RING_RADIUS * Math.cos(a), 0, Shard_RING_RADIUS * Math.sin(a)];
 		const col = sClr(s.label);
 		const nd = {
 			key: s.key, pos: [...tagPos[s.label]], r: 0.12, color: col, paletteKey: s.label,
@@ -2829,7 +2829,7 @@ function showDetail(n) {
 		? ` &middot; tags: ${n.topDimensions.map(dim => `${dim.label} ${dim.score.toFixed(2)}`).join(", ")}`
 		: "";
 	document.getElementById("d-meta").innerHTML = n.kind === "tag"
-		? `strand &middot; importance: ${(n.importance || 0).toFixed(2)} &middot; links: ${n.linkCount || 0}${dimText}`
+		? `Shard &middot; importance: ${(n.importance || 0).toFixed(2)} &middot; links: ${n.linkCount || 0}${dimText}`
 		: `store: ${n.store} &middot; source: ${n.source || "\u2014"} &middot; access: ${n.access} &middot; importance: ${(n.importance || 0).toFixed(2)}${dimText}`;
 	document.getElementById("d-text").textContent = n.label;
 	const el = document.getElementById("d-edge-list"); el.innerHTML = "";
@@ -2911,7 +2911,7 @@ setupRecencyColorControls();
 setupPanelSettings();
 
 // ---- live poll for updates ----
-let lastThoughtCount = data.nodes.filter(n => n.type !== "strand").length;
+let lastThoughtCount = data.nodes.filter(n => n.type !== "Shard").length;
 let pollInterval = null;
 
 async function pollForUpdates() {

@@ -8,14 +8,14 @@ Matches FLOW.md Q_MERGE:
   Q_BST — Access boost: +log1p·0.02 freq  +0.05·exp recency
   Q_THR — Adaptive threshold: scale between floor (0.2) and configured max
              based on graph maturity and query-level match quality
-  Q_DED — Deduplicate across strands: best score per thought text
+  Q_DED — Deduplicate across Shards: best score per thought text
 """
 
 import math
 import time as _time
 
 from ..config import Config
-from ..strand.graph import Graph, Thought
+from ..Shard.graph import Graph, Thought
 
 SIMILARITY_FLOOR = 0.2
 
@@ -24,9 +24,9 @@ SIMILARITY_FLOOR = 0.2
 _EXCLUDED_SOURCES = {"query_response"}
 
 # Source prefix excluded from retrieval — registry nodes added to the global
-# graph to represent strands.  They are structural routing metadata, not
+# graph to represent Shards.  They are structural routing metadata, not
 # knowledge content, and should never appear in answers.
-_EXCLUDED_PREFIX = "strand:"
+_EXCLUDED_PREFIX = "Shard:"
 
 
 def _is_excluded(source: str) -> bool:
@@ -65,10 +65,10 @@ def merge(
 ) -> list[tuple[Thought, float]]:
 	"""Combine cosine / GNN / edge signals, apply access boost, filter by threshold.
 
-	Returns up to cfg.top_k * 3 candidates per strand so that deduplicate()
-	can make a fair global selection across all strands.  Returning only
-	top_k per strand would let a large strand with many mediocre-but-
-	passing thoughts crowd out a small strand with a few highly relevant ones.
+	Returns up to cfg.top_k * 3 candidates per Shard so that deduplicate()
+	can make a fair global selection across all Shards.  Returning only
+	top_k per Shard would let a large Shard with many mediocre-but-
+	passing thoughts crowd out a small Shard with a few highly relevant ones.
 	"""
 	now = _time.time()
 	has_gnn = bool(gnn)
@@ -118,7 +118,7 @@ def merge(
 
 
 def deduplicate(scored_lists: list[list[tuple[Thought, float]]], top_k: int) -> list[tuple[Thought, float]]:
-	"""Q_DED: Deduplicate across strands, keeping best score per thought text."""
+	"""Q_DED: Deduplicate across Shards, keeping best score per thought text."""
 	seen: dict[str, tuple[Thought, float]] = {}
 	for scored in scored_lists:
 		for thought, score in scored:

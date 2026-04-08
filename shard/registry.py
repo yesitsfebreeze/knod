@@ -17,12 +17,12 @@ class Registry:
 	def __init__(self):
 		self._path = Path.home() / ".config" / "shard" / "stores"
 		self.stores: dict[str, dict[str, str]] = {}  # name → {"path", "purpose"}
-		self.knids: dict[str, set[str]] = {}
+		self.clusters: dict[str, set[str]] = {}
 		self._load()
 
 	def _read_metadata(self, path: str) -> dict | None:
 		try:
-			from .strand.store import read_shard_metadata
+			from .Shard.store import read_shard_metadata
 
 			meta = read_shard_metadata(path)
 			return meta
@@ -33,21 +33,21 @@ class Registry:
 	def _load(self):
 		if not self._path.exists():
 			return
-		current_knid = None
+		current_cluster = None
 		paths: list[str] = []  # collect paths first, index after
 		for line in self._path.read_text(encoding="utf-8").splitlines():
 			line = line.strip()
 			if not line or line.startswith("#"):
 				continue
-			# Knid section header
+			# Cluster section header
 			if line.startswith("[") and line.endswith("]"):
-				current_knid = line[1:-1].strip()
-				if current_knid not in self.knids:
-					self.knids[current_knid] = set()
+				current_cluster = line[1:-1].strip()
+				if current_cluster not in self.clusters:
+					self.clusters[current_cluster] = set()
 				continue
-			if current_knid is not None:
-				# Lines inside a knid section are store names
-				self.knids[current_knid].add(line)
+			if current_cluster is not None:
+				# Lines inside a cluster section are store names
+				self.clusters[current_cluster].add(line)
 			else:
 				# Legacy format: name = path
 				if "=" in line:
@@ -72,15 +72,15 @@ class Registry:
 			purpose = meta.get("purpose", "")
 			self.stores[name] = {"path": resolved, "purpose": purpose}
 
-		# Prune knid members that don't correspond to any loaded store
+		# Prune cluster members that don't correspond to any loaded store
 		changed = False
-		for members in self.knids.values():
+		for members in self.clusters.values():
 			stale = members - set(self.stores.keys())
 			if stale:
 				members -= stale
 				changed = True
 		if changed:
-			self.knids = {k: v for k, v in self.knids.items() if v}
+			self.clusters = {k: v for k, v in self.clusters.items() if v}
 			self.save()
 
 	def _append(self, path: str):
@@ -98,10 +98,10 @@ class Registry:
 			if p not in seen_paths:
 				lines.append(p)
 				seen_paths.add(p)
-		# Knid sections
-		for knid_name, members in self.knids.items():
+		# cluster sections
+		for cluster_name, members in self.clusters.items():
 			lines.append("")
-			lines.append(f"[{knid_name}]")
+			lines.append(f"[{cluster_name}]")
 			for member in sorted(members):
 				lines.append(member)
 		self._path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -120,39 +120,39 @@ class Registry:
 
 	def unregister(self, name: str):
 		self.stores.pop(name, None)
-		# Remove from all knids
-		for members in self.knids.values():
+		# Remove from all clusters
+		for members in self.clusters.values():
 			members.discard(name)
 		self.save()
 
 	def list_stores(self) -> dict[str, dict[str, str]]:
 		return dict(self.stores)
 
-	# ---- knid management ----
+	# ---- cluster management ----
 
-	def add_to_knid(self, knid_name: str, store_name: str):
-		if knid_name not in self.knids:
-			self.knids[knid_name] = set()
-		self.knids[knid_name].add(store_name)
+	def add_to_cluster(self, cluster_name: str, store_name: str):
+		if cluster_name not in self.clusters:
+			self.clusters[cluster_name] = set()
+		self.clusters[cluster_name].add(store_name)
 		self.save()
 
-	def remove_from_knid(self, knid_name: str, store_name: str) -> bool:
-		if knid_name not in self.knids:
+	def remove_from_cluster(self, cluster_name: str, store_name: str) -> bool:
+		if cluster_name not in self.clusters:
 			return False
-		members = self.knids[knid_name]
+		members = self.clusters[cluster_name]
 		if store_name not in members:
 			return False
 		members.discard(store_name)
 		if not members:
-			del self.knids[knid_name]
+			del self.clusters[cluster_name]
 		self.save()
 		return True
 
-	def list_knids(self) -> dict[str, set[str]]:
-		return dict(self.knids)
+	def list_clusters(self) -> dict[str, set[str]]:
+		return dict(self.clusters)
 
-	def stores_in_knid(self, knid_name: str) -> set[str]:
-		return set(self.knids.get(knid_name, set()))
+	def stores_in_cluster(self, cluster_name: str) -> set[str]:
+		return set(self.clusters.get(cluster_name, set()))
 
 	def migrate_to_hashed(self):
 		import re

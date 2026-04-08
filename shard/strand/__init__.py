@@ -1,1 +1,1 @@
-"""Strand store — graph, GNN, trainer, persistence."""
+"""Shard store — graph, GNN, trainer, persistence."""

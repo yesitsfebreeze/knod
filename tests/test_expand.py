@@ -14,7 +14,7 @@ import numpy as np
 import pytest
 
 from shard.config import Config
-from shard.strand.graph import Graph
+from shard.Shard.graph import Graph
 from shard.retrieval.expand import expand
 
 

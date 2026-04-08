@@ -1,4 +1,4 @@
-"""Strand types — shared dataclasses used across handler and limbo layers.
+"""Shard types — shared dataclasses used across handler and limbo layers.
 
 Moved here from handler.py to break the upward dependency from limbo/promote.py
 into the top-level handler module.
@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from .graph import Graph
-from .gnn import ShardMPNN, StrandLayer
+from .gnn import ShardMPNN, ShardLayer
 
 
 @dataclass(frozen=True)
@@ -28,8 +28,8 @@ EventListener = Callable[[GraphEvent], None]
 
 
 @dataclass
-class StrandIndexEntry:
-	"""Lightweight metadata for one strand, built on startup."""
+class ShardIndexEntry:
+	"""Lightweight metadata for one Shard, built on startup."""
 
 	name: str
 	purpose: str
@@ -39,17 +39,17 @@ class StrandIndexEntry:
 	num_edges: int
 
 
-class Strand:
-	"""One strand = graph + model + strand layer."""
+class Shard:
+	"""One Shard = graph + model + Shard layer."""
 
-	__slots__ = ("name", "purpose", "graph", "model", "strand")
+	__slots__ = ("name", "purpose", "graph", "model", "Shard")
 
-	def __init__(self, name, purpose, graph, model, strand):
+	def __init__(self, name, purpose, graph, model, Shard):
 		self.name = name
 		self.purpose = purpose
 		self.graph = graph
 		self.model = model
-		self.strand = strand
+		self.Shard = Shard
 
 
 @dataclass

@@ -1,4 +1,4 @@
-"""Base MPNN (3-layer message passing) + StrandLayer (per-strand fine-tuning)."""
+"""Base MPNN (3-layer message passing) + ShardLayer (per-Shard fine-tuning)."""
 
 import torch
 import torch.nn as nn
@@ -57,7 +57,7 @@ class ShardMPNN(nn.Module):
 		return h, scores
 
 
-class StrandLayer(nn.Module):
+class ShardLayer(nn.Module):
 	def __init__(self, hidden_dim: int):
 		super().__init__()
 		self.msg_mlp = nn.Linear(hidden_dim * 2, hidden_dim)

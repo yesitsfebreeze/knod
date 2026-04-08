@@ -32,13 +32,13 @@ def main():
 	ingest_cmd.add_argument("file", type=str, help="Path to text file")
 	ingest_cmd.add_argument("--graph", type=str, default=None)
 	ingest_cmd.add_argument("--descriptor", type=str, default="")
-	ingest_cmd.add_argument("--knid", type=str, default=None, help="Scope to knid group")
+	ingest_cmd.add_argument("--cluster", type=str, default=None, help="Scope to cluster")
 
 	# ask
 	ask_cmd = sub.add_parser("ask", help="Ask a question")
 	ask_cmd.add_argument("query", type=str)
 	ask_cmd.add_argument("--graph", type=str, default=None)
-	ask_cmd.add_argument("--knid", type=str, default=None, help="Scope to knid group")
+	ask_cmd.add_argument("--cluster", type=str, default=None, help="Scope to cluster")
 
 	# explore
 	explore_cmd = sub.add_parser("explore", help="Show graph stats")
@@ -49,32 +49,32 @@ def main():
 	corpus_cmd.add_argument("--dir", type=str, default="corpus")
 	corpus_cmd.add_argument("--graph", type=str, default=None)
 
-	# new — create a new strand interactively
-	new_cmd = sub.add_parser("new", help="Create a new strand graph")
-	new_cmd.add_argument("--knid", type=str, default=None, help="Add to knid group")
+	# new — create a new Shard interactively
+	new_cmd = sub.add_parser("new", help="Create a new Shard graph")
+	new_cmd.add_argument("--cluster", type=str, default=None, help="Add to cluster")
 
 	# register — register an existing graph file
 	register_cmd = sub.add_parser("register", help="Register an existing graph file")
 	register_cmd.add_argument("path", type=str, help="Path to .shard file")
-	register_cmd.add_argument("--knid", type=str, default=None, help="Add to knid group")
+	register_cmd.add_argument("--cluster", type=str, default=None, help="Add to cluster")
 
 	# list — list registered stores
 	list_cmd = sub.add_parser("list", help="List registered stores")
-	list_cmd.add_argument("--knid", type=str, default=None, help="Filter by knid group")
+	list_cmd.add_argument("--cluster", type=str, default=None, help="Filter by cluster")
 
-	# knid — manage knid groupings
-	knid_cmd = sub.add_parser("knid", help="Manage knid groupings")
-	knid_sub = knid_cmd.add_subparsers(dest="knid_command")
-	knid_new_cmd = knid_sub.add_parser("new", help="Create a new knid")
-	knid_new_cmd.add_argument("name", type=str)
-	knid_add_cmd = knid_sub.add_parser("add", help="Add store to knid")
-	knid_add_cmd.add_argument("name", type=str, help="Knid name")
-	knid_add_cmd.add_argument("store", type=str, help="Store name")
-	knid_remove_cmd = knid_sub.add_parser("remove", help="Remove store from knid")
-	knid_remove_cmd.add_argument("name", type=str, help="Knid name")
-	knid_remove_cmd.add_argument("store", type=str, help="Store name")
-	knid_list_cmd = knid_sub.add_parser("list", help="List knids or stores in a knid")
-	knid_list_cmd.add_argument("name", type=str, nargs="?", default=None)
+	# cluster — manage clusterings
+	cluster_cmd = sub.add_parser("cluster", help="Manage clusterings")
+	cluster_sub = cluster_cmd.add_subparsers(dest="cluster_command")
+	cluster_new_cmd = cluster_sub.add_parser("new", help="Create a new cluster")
+	cluster_new_cmd.add_argument("name", type=str)
+	cluster_add_cmd = cluster_sub.add_parser("add", help="Add store to cluster")
+	cluster_add_cmd.add_argument("name", type=str, help="cluster name")
+	cluster_add_cmd.add_argument("store", type=str, help="Store name")
+	cluster_remove_cmd = cluster_sub.add_parser("remove", help="Remove store from cluster")
+	cluster_remove_cmd.add_argument("name", type=str, help="cluster name")
+	cluster_remove_cmd.add_argument("store", type=str, help="Store name")
+	cluster_list_cmd = cluster_sub.add_parser("list", help="List clusters or stores in a cluster")
+	cluster_list_cmd.add_argument("name", type=str, nargs="?", default=None)
 
 	# migrate — rename store files to SHA-256 hashed names
 	sub.add_parser("migrate", help="Rename store files to SHA-256 hashed names")
@@ -101,10 +101,10 @@ def main():
 		_do_mcp_stdio(cfg)
 
 	elif args.command == "ingest":
-		_do_ingest_file(cfg, args.file, args.descriptor, knid=getattr(args, "knid", None))
+		_do_ingest_file(cfg, args.file, args.descriptor, cluster=getattr(args, "cluster", None))
 
 	elif args.command == "ask":
-		_do_ask(cfg, args.query, knid=getattr(args, "knid", None))
+		_do_ask(cfg, args.query, cluster=getattr(args, "cluster", None))
 
 	elif args.command == "explore":
 		_do_explore(cfg)
@@ -113,16 +113,16 @@ def main():
 		_do_ingest_corpus(cfg, args.dir)
 
 	elif args.command == "new":
-		_do_new(cfg, knid=getattr(args, "knid", None))
+		_do_new(cfg, cluster=getattr(args, "cluster", None))
 
 	elif args.command == "register":
-		_do_register(cfg, args.path, knid=getattr(args, "knid", None))
+		_do_register(cfg, args.path, cluster=getattr(args, "cluster", None))
 
 	elif args.command == "list":
-		_do_list(cfg, knid=getattr(args, "knid", None))
+		_do_list(cfg, cluster=getattr(args, "cluster", None))
 
-	elif args.command == "knid":
-		_do_knid(cfg, args)
+	elif args.command == "cluster":
+		_do_cluster(cfg, args)
 
 	elif args.command == "migrate":
 		_do_migrate()
@@ -226,20 +226,20 @@ def _load_handler(cfg: Config):
 	return handler
 
 
-def _do_ingest_file(cfg: Config, filepath: str, descriptor: str = "", knid: str | None = None):
+def _do_ingest_file(cfg: Config, filepath: str, descriptor: str = "", cluster: str | None = None):
 	log = logging.getLogger(__name__)
 	text = Path(filepath).read_text(encoding="utf-8")
 	handler = _load_handler(cfg)
 
-	if knid:
-		store_names = handler.registry.stores_in_knid(knid)
+	if cluster:
+		store_names = handler.registry.stores_in_cluster(cluster)
 		if not store_names:
-			log.warning("No stores in knid '%s'", knid)
+			log.warning("No stores in cluster '%s'", cluster)
 			handler.shutdown()
 			return
 		for sname in store_names:
 			try:
-				n = handler.ingest_into_strand(sname, text, source=Path(filepath).stem, descriptor=descriptor)
+				n = handler.ingest_into_Shard(sname, text, source=Path(filepath).stem, descriptor=descriptor)
 				log.info("%s: %d thoughts committed", sname, n)
 			except KeyError:
 				log.info("%s: not loaded, skipping", sname)
@@ -250,10 +250,10 @@ def _do_ingest_file(cfg: Config, filepath: str, descriptor: str = "", knid: str 
 	handler.shutdown()
 
 
-def _do_ask(cfg: Config, query: str, knid: str | None = None):
+def _do_ask(cfg: Config, query: str, cluster: str | None = None):
 	handler = _load_handler(cfg)
 
-	answer, sources = handler.ask(query, knid=knid)
+	answer, sources = handler.ask(query, cluster=cluster)
 
 	print(f"\n{answer}\n")
 	print("--- Sources ---")
@@ -320,7 +320,7 @@ def _do_ingest_corpus(cfg: Config, corpus_dir: str):
 	log.info("Done. Graph: %d thoughts, %d edges", info["thought_count"], info["edge_count"])
 
 
-def _do_new(cfg: Config, knid: str | None = None):
+def _do_new(cfg: Config, cluster: str | None = None):
 	log = logging.getLogger(__name__)
 	purpose = input("Purpose: ").strip()
 	if not purpose:
@@ -337,19 +337,19 @@ def _do_new(cfg: Config, knid: str | None = None):
 		location = str(Path.cwd())
 
 	handler = _load_handler(cfg)
-	graph_path = handler.create_strand(name, purpose, location, knid=knid)
+	graph_path = handler.create_Shard(name, purpose, location, cluster=cluster)
 
-	if knid:
-		log.info("Added to knid '%s'", knid)
+	if cluster:
+		log.info("Added to cluster '%s'", cluster)
 
-	log.info("Created strand '%s' at %s", name, graph_path)
+	log.info("Created Shard '%s' at %s", name, graph_path)
 	handler.shutdown()
 
 
-def _do_register(cfg: Config, path: str, knid: str | None = None):
+def _do_register(cfg: Config, path: str, cluster: str | None = None):
 	log = logging.getLogger(__name__)
 	from .registry import Registry
-	from .strand.store import read_shard_metadata
+	from .Shard.store import read_shard_metadata
 
 	graph_path = Path(path)
 	if not graph_path.exists():
@@ -367,25 +367,25 @@ def _do_register(cfg: Config, path: str, knid: str | None = None):
 	registry = Registry()
 	registry.register(str(graph_path.resolve()))
 
-	if knid:
-		registry.add_to_knid(knid, name)
-		log.info("Added to knid '%s'", knid)
+	if cluster:
+		registry.add_to_cluster(cluster, name)
+		log.info("Added to cluster '%s'", cluster)
 
 	log.info("Registered '%s' (purpose: %s)", name, purpose or "(none)")
 
 
-def _do_list(cfg: Config, knid: str | None = None):
+def _do_list(cfg: Config, cluster: str | None = None):
 	log = logging.getLogger(__name__)
 	from .registry import Registry
 
 	registry = Registry()
 
-	if knid:
-		members = registry.stores_in_knid(knid)
+	if cluster:
+		members = registry.stores_in_cluster(cluster)
 		if not members:
-			log.info("No stores in knid '%s'", knid)
+			log.info("No stores in cluster '%s'", cluster)
 			return
-		log.info("Stores in knid '%s':", knid)
+		log.info("Stores in cluster '%s':", cluster)
 		for name in sorted(members):
 			entry = registry.stores.get(name, {})
 			print(f"  {name} = {entry.get('path', '(unknown)')}")
@@ -398,54 +398,54 @@ def _do_list(cfg: Config, knid: str | None = None):
 			print(f"  {name} = {entry['path']}")
 
 
-def _do_knid(cfg: Config, args):
+def _do_cluster(cfg: Config, args):
 	log = logging.getLogger(__name__)
 	from .registry import Registry
 
 	registry = Registry()
-	cmd = getattr(args, "knid_command", None)
+	cmd = getattr(args, "cluster_command", None)
 
 	if cmd == "new":
 		name = args.name
-		if name in registry.knids:
-			log.info("Knid '%s' already exists", name)
+		if name in registry.clusters:
+			log.info("cluster '%s' already exists", name)
 			return
-		registry.knids[name] = set()
+		registry.clusters[name] = set()
 		registry.save()
-		log.info("Created knid '%s'", name)
+		log.info("Created cluster '%s'", name)
 
 	elif cmd == "add":
 		if args.store not in registry.stores:
 			log.warning("Store '%s' is not registered", args.store)
 			return
-		registry.add_to_knid(args.name, args.store)
-		log.info("Added '%s' to knid '%s'", args.store, args.name)
+		registry.add_to_cluster(args.name, args.store)
+		log.info("Added '%s' to cluster '%s'", args.store, args.name)
 
 	elif cmd == "remove":
-		if registry.remove_from_knid(args.name, args.store):
-			log.info("Removed '%s' from knid '%s'", args.store, args.name)
+		if registry.remove_from_cluster(args.name, args.store):
+			log.info("Removed '%s' from cluster '%s'", args.store, args.name)
 		else:
-			log.warning("'%s' not found in knid '%s'", args.store, args.name)
+			log.warning("'%s' not found in cluster '%s'", args.store, args.name)
 
 	elif cmd == "list":
 		if args.name:
-			members = registry.stores_in_knid(args.name)
+			members = registry.stores_in_cluster(args.name)
 			if not members:
-				log.info("No stores in knid '%s'", args.name)
+				log.info("No stores in cluster '%s'", args.name)
 			else:
-				log.info("Knid '%s':", args.name)
+				log.info("cluster '%s':", args.name)
 				for m in sorted(members):
 					print(f"  {m}")
 		else:
-			knids = registry.list_knids()
-			if not knids:
-				log.info("No knids defined")
+			clusters = registry.list_clusters()
+			if not clusters:
+				log.info("No clusters defined")
 			else:
-				for name, members in knids.items():
+				for name, members in clusters.items():
 					print(f"  [{name}] {', '.join(sorted(members)) or '(empty)'}")
 
 	else:
-		print("Usage: py_shard knid {new|add|remove|list}")
+		print("Usage: py_shard cluster {new|add|remove|list}")
 
 
 def _do_migrate():
