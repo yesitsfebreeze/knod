@@ -1228,7 +1228,7 @@ class Handler:
 			try:
 				base = Path(graph_path).with_suffix("")
 				graph, model, shard_layer = load_all(self.cfg, base)
-				self._shards[name] = shard(
+				self._shards[name] = Shard(
 					name=name,
 					purpose=entry.get("purpose", "") or graph.purpose,
 					graph=graph,
