@@ -1,7 +1,6 @@
-"""Configuration management — reads from ~/.config/shard/config or env vars."""
+"""Configuration management — reads from ~/.config/shard/config."""
 
 import dataclasses
-import os
 import typing
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -9,19 +8,35 @@ from pathlib import Path
 
 @dataclass
 class Config:
-	api_key: str = ""
-	base_url: str = "https://api.openai.com/v1"
-	embedding_model: str = "text-embedding-3-small"
-	chat_model: str = "gpt-4o-mini"
-	embedding_dim: int = 1536
+	# Voyage tier (embeddings)
+	voyage_api_key: str = ""
+	voyage_base_url: str = ""
+	voyage_model: str = "voyage-4"
+
+	# Anthropic tier (Claude chat)
+	anthropic_api_key: str = ""
+	anthropic_base_url: str = ""
+	anthropic_model: str = "claude-sonnet-4-20250514"
+
+	# OpenAI tier (OpenAI-compatible API)
+	openai_api_key: str = ""
+	openai_base_url: str = "https://api.openai.com/v1"
+	openai_model: str = "gpt-4o-mini"
+	openai_embedding_model: str = "text-embedding-3-small"
+
+	# Local tier (Ollama or other local APIs)
+	local_api_key: str = "ollama"
+	local_base_url: str = ""
+	local_model: str = ""
+	local_embedding_model: str = ""
+
+	# Embedding settings
+	embedding_dim: int = 1024
+
+	# Model settings
 	hidden_dim: int = 512
 	num_layers: int = 3
-	fallback_base_url: str = ""
-	fallback_api_key: str = "ollama"
-	fallback_chat_model: str = ""
 
-	anthropic_api_key: str = ""
-	anthropic_base_url: str = "https://api.anthropic.com"
 	edge_mask_ratio: float = 0.15
 	margin: float = 0.1
 	lr_max: float = 1e-3
@@ -31,45 +46,77 @@ class Config:
 	min_link_weight: float = 0.1
 	maturity_divisor: int = 50
 	top_k: int = 5
-	max_thoughts: int = 0  # 0 = unlimited
-	max_edges: int = 0  # 0 = unlimited
-	decay_coefficient: float = 0.0  # per-hour edge weight decay; 0 = disabled
-	dedup_threshold: float = 0.95  # cosine similarity above which a new thought merges into existing
-	limbo_scan_interval: float = 60.0  # seconds between scans
-	limbo_cluster_min: int = 3  # minimum cluster size to promote
-	limbo_cluster_threshold: float = 0.50  # cosine threshold for clustering
+	max_thoughts: int = 0
+	max_edges: int = 0
+	decay_coefficient: float = 0.0
+	dedup_threshold: float = 0.95
+	limbo_scan_interval: float = 60.0
+	limbo_cluster_min: int = 3
+	limbo_cluster_threshold: float = 0.50
 	shard_match_threshold: float = 0.8
 	confidence_threshold: float = 0.85
-	query_routing_threshold: float = 0.3  # min profile similarity to include shard in query
-	traversal_depth: int = 2  # max hops in Dijkstra path expansion
-	traversal_fan_out: int = 10  # max new nodes discovered per expand() call
-	refinement_interval: int = 10  # refine edge weights every N retrievals
-	refinement_boost: float = 0.02  # weight boost for high-success edges
-	refinement_dampen: float = 0.01  # weight reduction for zero-success edges
-	refinement_min_traversals: int = 3  # min traversals before refining an edge
+	query_routing_threshold: float = 0.3
+	traversal_depth: int = 2
+	traversal_fan_out: int = 10
+	refinement_interval: int = 10
+	refinement_boost: float = 0.02
+	refinement_dampen: float = 0.01
+	refinement_min_traversals: int = 3
 
-	# Server
 	tcp_port: int = 7999
 	http_port: int = 8080
 
-	# Paths
 	graph_path: str = ".shard/graph.shard"
 	base_gnn_path: str = ""
 
 	@classmethod
-	def load(cls) -> "Config":
+	def load(cls, config_dir: Path | None = None) -> "Config":
 		cfg = cls()
 
-		config_path = Path.home() / ".config" / "shard" / "config"
-		if config_path.exists():
+		# Load user home config first (lower priority)
+		home_config = Path.home() / ".config" / "shard" / "config"
+		config_paths = [home_config] if home_config.exists() else []
+
+		# Local config last (higher priority)
+		local_config = (config_dir or Path.cwd()) / "config"
+		if local_config.exists():
+			config_paths.append(local_config)
+
+		# Section to field prefix mapping
+		section_prefixes = {
+			"model": "",
+			"graph": "",
+			"training": "",
+			"limbo": "",
+			"strand": "",
+			"traversal": "",
+			"refinement": "",
+			"server": "",
+			"storage": "",
+		}
+
+		for config_path in config_paths:
+			if not config_path.exists():
+				continue
+
 			kv: dict[str, str] = {}
+			current_section = ""
 			for line in config_path.read_text(encoding="utf-8").splitlines():
 				line = line.strip()
 				if not line or line.startswith("#"):
 					continue
+				if line.startswith("[") and line.endswith("]"):
+					current_section = line[1:-1]
+					continue
 				if "=" in line:
 					k, v = line.split("=", 1)
-					kv[k.strip()] = v.strip()
+					key = k.strip()
+					val = v.strip()
+					# Apply section prefix unless in common sections
+					prefix = section_prefixes.get(current_section, current_section + "_")
+					if prefix:
+						key = f"{prefix}{key}"
+					kv[key] = val
 
 			hints = typing.get_type_hints(cls)
 			for f in dataclasses.fields(cls):
@@ -88,16 +135,5 @@ class Config:
 						setattr(cfg, f.name, raw)
 				except (ValueError, TypeError):
 					pass
-
-		if v := os.environ.get("OPENAI_API_KEY"):
-			cfg.api_key = v
-		if v := os.environ.get("shard_BASE_URL"):
-			cfg.base_url = v
-		if v := os.environ.get("shard_GRAPH_PATH"):
-			cfg.graph_path = v
-		if v := os.environ.get("ANTHROPIC_API_KEY"):
-			cfg.anthropic_api_key = v
-		if v := os.environ.get("ANTHROPIC_BASE_URL"):
-			cfg.anthropic_base_url = v
 
 		return cfg

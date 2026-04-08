@@ -1,8 +1,10 @@
 import json
 import logging
 import numpy as np
-from openai import OpenAI, APIStatusError, APITimeoutError, APIConnectionError, RateLimitError, AuthenticationError
 from anthropic import Anthropic
+import voyageai
+from voyageai.error import AuthenticationError as VoyageAuthError, RateLimitError as VoyageRateLimitError
+from openai import OpenAI, APIStatusError, APITimeoutError, APIConnectionError, RateLimitError, AuthenticationError
 
 from .config import Config
 
@@ -185,53 +187,64 @@ TOOL_DEFINITIONS = [
 class Provider:
 	def __init__(self, cfg: Config):
 		self._cfg = cfg
+		self._use_voyage = bool(cfg.voyage_api_key)
 		self._use_anthropic = bool(cfg.anthropic_api_key)
+		self._use_openai = bool(cfg.openai_api_key)
+		self._use_local = bool(cfg.local_base_url)
+
+		if self._use_voyage:
+			self._voyage = voyageai.Client(api_key=cfg.voyage_api_key)
+		else:
+			self._voyage = None
 
 		if self._use_anthropic:
-			self._anthropic = Anthropic(api_key=cfg.anthropic_api_key, base_url=cfg.anthropic_base_url or None)
+			self._anthropic = Anthropic(
+				api_key=cfg.anthropic_api_key,
+				**({"base_url": cfg.anthropic_base_url} if cfg.anthropic_base_url else {}),
+			)
 		else:
 			self._anthropic = None
 
-		if cfg.api_key:
-			self._openai = OpenAI(api_key=cfg.api_key, base_url=cfg.base_url)
+		if self._use_openai:
+			self._openai = OpenAI(api_key=cfg.openai_api_key, base_url=cfg.openai_base_url)
 		else:
 			self._openai = None
 
-		self.embedding_model = cfg.embedding_model
-		self.chat_model = cfg.chat_model
-		self.embedding_dim = cfg.embedding_dim
-
-		if cfg.fallback_base_url:
-			self._fallback = OpenAI(api_key=cfg.fallback_api_key, base_url=cfg.fallback_base_url)
-			self._fallback_chat_model = cfg.fallback_chat_model or cfg.chat_model
+		if self._use_local:
+			self._local = OpenAI(api_key=cfg.local_api_key, base_url=cfg.local_base_url)
 		else:
-			self._fallback = None
-			self._fallback_chat_model = ""
+			self._local = None
+
+		self.chat_model = cfg.openai_model
+		self.embedding_model = cfg.openai_model
+		self.embedding_dim = cfg.embedding_dim
+		self._embed_provider: str | None = None  # None = not yet probed
 
 	def _chat(self, **kwargs) -> "openai.types.chat.ChatCompletion":
 		if self._use_anthropic:
 			try:
-				return self._anthropic_chat(**kwargs)
+				return self._anthropic_chat(**{**kwargs, "model": self._cfg.anthropic_model})
 			except _FALLBACK_ERRORS as exc:
 				log.warning("Anthropic failed (%s), trying OpenAI", exc)
 
-		if self._cfg.api_key:
+		if self._use_openai:
 			try:
 				return self._openai_chat(**kwargs)
 			except _FALLBACK_ERRORS as exc:
-				log.warning("OpenAI failed (%s), trying local fallback", exc)
+				log.warning("OpenAI failed (%s), trying local", exc)
 
-		if self._fallback is not None:
-			return self._fallback_chat(**kwargs)
+		if self._local is not None:
+			return self._local_chat(**kwargs)
 
-		raise RuntimeError("No providers available: set ANTHROPIC_API_KEY, OPENAI_API_KEY, or configure fallback")
+		raise RuntimeError("No providers available: configure anthropic_api_key, openai_api_key, or local_base_url")
 
 	def _openai_chat(self, **kwargs) -> "openai.types.chat.ChatCompletion":
 		return self._openai.chat.completions.create(**kwargs)
 
-	def _fallback_chat(self, **kwargs) -> "openai.types.chat.ChatCompletion":
-		kwargs["model"] = self._fallback_chat_model
-		return self._fallback.chat.completions.create(**kwargs)
+	def _local_chat(self, **kwargs) -> "openai.types.chat.ChatCompletion":
+		messages = kwargs.pop("messages", [])
+		kwargs["model"] = self._cfg.local_model or self.chat_model
+		return self._local.chat.completions.create(messages=messages, **kwargs)
 
 	def _anthropic_chat(self, **kwargs) -> "openai.types.chat.ChatCompletion":
 		messages = kwargs.pop("messages", [])
@@ -250,39 +263,92 @@ class Provider:
 		# Anthropic doesn't support response_format - remove it
 		kwargs.pop("response_format", None)
 
-		try:
-			resp = self._anthropic.messages.create(
-				model=model,
-				max_tokens=4096,
-				system=system,
-				messages=anthropic_messages,
-				**kwargs,
-			)
-			content = resp.content[0].text if resp.content else ""
-			return OpenAIMessage(content=content, model=model)
-		except Exception as exc:
-			if self._fallback is None:
-				raise
-			log.warning("Anthropic failed (%s), falling back to local", exc)
-			# Strip kwargs that OpenAI doesn't support
-			kwargs.pop("response_format", None)
-			kwargs["model"] = self._fallback_chat_model
-			return self._fallback.chat.completions.create(**kwargs)
+		resp = self._anthropic.messages.create(
+			model=model,
+			max_tokens=4096,
+			system=system,
+			messages=anthropic_messages,
+			**kwargs,
+		)
+		content = resp.content[0].text if resp.content else ""
+		return OpenAIMessage(content=content, model=model)
+
+	def _probe_embed(self) -> None:
+		"""Status-check each embedding tier in order; cache the first working one."""
+		probe = "probe"
+		if self._voyage is not None:
+			try:
+				self._voyage.embed([probe], model=self._cfg.voyage_model)
+				self._embed_provider = "voyage"
+				log.info("Embedding provider: voyage (%s)", self._cfg.voyage_model)
+				return
+			except VoyageRateLimitError as e:
+				log.warning("Voyage rate limited: %s", e)
+			except VoyageAuthError as e:
+				log.warning("Voyage auth error: %s", e)
+				self._voyage = None
+			except Exception as e:
+				log.warning("Voyage embedding unavailable (%s), trying next provider", e)
+				self._voyage = None
+
+		if self._openai is not None:
+			try:
+				self._openai.embeddings.create(model=self._cfg.openai_embedding_model, input=probe)
+				self._embed_provider = "openai"
+				log.info("Embedding provider: openai (%s)", self._cfg.openai_embedding_model)
+				return
+			except Exception as e:
+				log.warning("OpenAI embedding unavailable (%s), trying next provider", e)
+				self._openai = None
+
+		if self._local is not None and self._use_local:
+			local_model = self._cfg.local_embedding_model or self._cfg.local_model
+			if local_model:
+				try:
+					self._local.embeddings.create(model=local_model, input=probe)
+					self._embed_provider = "local"
+					log.info("Embedding provider: local (%s)", local_model)
+					return
+				except Exception as e:
+					log.warning("Local embedding unavailable (%s)", e)
+
+		self._embed_provider = ""
+		raise RuntimeError(
+			"No embedding provider available — configure voyage_api_key, "
+			"openai_api_key+openai_embedding_model, or local_base_url+local_embedding_model"
+		)
 
 	def embed_text(self, text: str) -> np.ndarray:
-		if self._use_anthropic:
-			raise NotImplementedError("Embedding not supported with Anthropic")
-		resp = self._openai.embeddings.create(model=self.embedding_model, input=text)
-		return np.array(resp.data[0].embedding, dtype=np.float32)
+		if self._embed_provider is None:
+			self._probe_embed()
+		if self._embed_provider == "voyage":
+			result = self._voyage.embed([text], model=self._cfg.voyage_model)
+			return np.array(result.embeddings[0], dtype=np.float32)
+		if self._embed_provider == "openai":
+			resp = self._openai.embeddings.create(model=self._cfg.openai_embedding_model, input=text)
+			return np.array(resp.data[0].embedding, dtype=np.float32)
+		if self._embed_provider == "local":
+			model = self._cfg.local_embedding_model or self._cfg.local_model
+			resp = self._local.embeddings.create(model=model, input=text)
+			return np.array(resp.data[0].embedding, dtype=np.float32)
+		raise RuntimeError("No embedding provider available")
 
 	def embed_texts(self, texts: list[str]) -> list[np.ndarray]:
-		if self._use_anthropic:
-			raise NotImplementedError("Embedding not supported with Anthropic")
 		if not texts:
 			return []
-		resp = self._openai.embeddings.create(model=self.embedding_model, input=texts)
-		sorted_data = sorted(resp.data, key=lambda d: d.index)
-		return [np.array(d.embedding, dtype=np.float32) for d in sorted_data]
+		if self._embed_provider is None:
+			self._probe_embed()
+		if self._embed_provider == "voyage":
+			result = self._voyage.embed(texts, model=self._cfg.voyage_model)
+			return [np.array(e, dtype=np.float32) for e in result.embeddings]
+		if self._embed_provider == "openai":
+			resp = self._openai.embeddings.create(model=self._cfg.openai_embedding_model, input=texts)
+			return [np.array(d.embedding, dtype=np.float32) for d in sorted(resp.data, key=lambda d: d.index)]
+		if self._embed_provider == "local":
+			model = self._cfg.local_embedding_model or self._cfg.local_model
+			resp = self._local.embeddings.create(model=model, input=texts)
+			return [np.array(d.embedding, dtype=np.float32) for d in sorted(resp.data, key=lambda d: d.index)]
+		raise RuntimeError("No embedding provider available")
 
 	def decompose_text(self, text: str, purpose: str = "", descriptors: dict[str, str] | None = None) -> list[str]:
 		system = (
@@ -306,7 +372,13 @@ class Provider:
 			],
 			response_format={"type": "json_object"},
 		)
-		data = json.loads(resp.choices[0].message.content)
+		content = resp.choices[0].message.content.strip()
+		if content.startswith("```"):
+			content = content.split("```")[1]
+			if content.startswith("json"):
+				content = content[4:]
+		content = content.strip()
+		data = json.loads(content)
 		if isinstance(data, list):
 			return data
 		for key in ("thoughts", "items", "statements", "facts"):
@@ -339,7 +411,13 @@ class Provider:
 			],
 			response_format={"type": "json_object"},
 		)
-		data = json.loads(resp.choices[0].message.content)
+		content = resp.choices[0].message.content.strip()
+		if content.startswith("```"):
+			content = content.split("```")[1]
+			if content.startswith("json"):
+				content = content[4:]
+		content = content.strip()
+		data = json.loads(content)
 		links = data.get("links", [])
 		return [
 			{"index": l["index"], "weight": l["weight"], "reasoning": l["reasoning"]}

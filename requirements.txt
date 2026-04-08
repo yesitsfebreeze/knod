@@ -6,3 +6,4 @@ fastapi
 uvicorn[standard]
 pydantic
 mcp>=1.0
+voyageai

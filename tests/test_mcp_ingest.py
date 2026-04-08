@@ -1,4 +1,4 @@
-"""Test MCP ingest with fallback."""
+"""Test MCP ingest."""
 
 import sys
 
@@ -8,8 +8,9 @@ from shard.config import Config
 from shard.handler import Handler
 
 cfg = Config.load()
-print(f"Fallback URL: {cfg.fallback_base_url}")
-print(f"Fallback model: {cfg.fallback_chat_model}")
+print(f"Voyage: {cfg.voyage_model}")
+print(f"Anthropic: {cfg.anthropic_model}")
+print(f"Local: {cfg.local_base_url}")
 
 handler = Handler(cfg)
 handler.init()

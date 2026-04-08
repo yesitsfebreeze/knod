@@ -301,12 +301,14 @@ def http(handler: Handler) -> FastAPI:
 	_web_dir = Path(__file__).resolve().parent.parent / "web"
 	app.mount("/public", StaticFiles(directory=str(_web_dir / "_public")), name="public")
 
+	_NO_CACHE = {"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache"}
+
 	@app.get("/view", response_class=HTMLResponse)
 	def view():
-		return (_web_dir / "view" / "index.html").read_text(encoding="utf-8")
+		return HTMLResponse((_web_dir / "view" / "index.html").read_text(encoding="utf-8"), headers=_NO_CACHE)
 
 	@app.get("/chat", response_class=HTMLResponse)
-	def chat():
-		return (_web_dir / "chat" / "index.html").read_text(encoding="utf-8")
+	def chat_ui():
+		return HTMLResponse((_web_dir / "chat" / "index.html").read_text(encoding="utf-8"), headers=_NO_CACHE)
 
 	return app

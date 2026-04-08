@@ -25,7 +25,7 @@ services:
       - SHARD_TCP_PORT=7999
     volumes:
       - ../config:/config:ro
-      - ../shard/web:/app/shard/web:rw
+      - ../shard/web:/shard/web:rw
       - shard-data:/root/.config/shard
       - shard-graph:/root/.shard
     restart: unless-stopped

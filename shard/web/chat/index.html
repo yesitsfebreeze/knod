@@ -1,88 +1,704 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
 	<meta charset="utf-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1">
-	<title>shard — chat</title>
+	<title>shard</title>
 	<link rel="preconnect" href="https://fonts.googleapis.com">
 	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-	<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-	<link rel="stylesheet" href="/static/style.css">
+	<link
+		href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500&family=JetBrains+Mono:wght@300;400&display=swap"
+		rel="stylesheet">
 	<style>
-		body { margin: 0; background: #0d0d0d; color: #e0e0e0; font-family: 'IBM Plex Mono', monospace; }
-		#app { display: flex; flex-direction: column; height: 100vh; max-width: 800px; margin: 0 auto; padding: 20px; box-sizing: border-box; }
-		header { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid #333; margin-bottom: 20px; }
-		header h1 { font-size: 1.2rem; font-weight: 500; margin: 0; color: #fff; }
-		#messages { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; padding: 10px 0; }
-		.message { padding: 12px 16px; border-radius: 8px; max-width: 85%; word-wrap: break-word; }
-		.message.user { align-self: flex-end; background: #1a4d2e; }
-		.message.assistant { align-self: flex-start; background: #1a1a1a; border: 1px solid #333; }
-		.message .role { font-size: 0.75rem; color: #888; margin-bottom: 4px; }
-		.message .content { line-height: 1.5; }
-		#input-area { display: flex; gap: 10px; padding-top: 16px; border-top: 1px solid #333; }
-		#input { flex: 1; padding: 12px 16px; border-radius: 8px; border: 1px solid #333; background: #0d0d0d; color: #e0e0e0; font-family: inherit; font-size: 14px; resize: none; }
-		#input:focus { outline: none; border-color: #4a9; }
-		#send { padding: 12px 24px; border-radius: 8px; border: none; background: #1a4d2e; color: #fff; font-family: inherit; font-weight: 500; cursor: pointer; }
-		#send:hover { background: #256839; }
-		#send:disabled { background: #333; cursor: not-allowed; }
-		.loading { color: #888; font-style: italic; }
+		:root {
+			--bg: #07090F;
+			--glass: rgba(255, 255, 255, 0.04);
+			--glass-border: rgba(255, 255, 255, 0.08);
+			--glass-user: rgba(88, 140, 255, 0.09);
+			--glass-user-b: rgba(88, 140, 255, 0.18);
+			--accent: #588CFF;
+			--accent-dim: rgba(88, 140, 255, 0.28);
+			--text: #E4E6F0;
+			--text-muted: rgba(228, 230, 240, 0.4);
+			--text-faint: rgba(228, 230, 240, 0.18);
+			--blur: 20px;
+			--font-ui: 'Outfit', sans-serif;
+			--font-mono: 'JetBrains Mono', monospace;
+			--ease: cubic-bezier(0.16, 1, 0.3, 1);
+			--reveal-opacity: 0.75;
+			/* 0–1: intensity of the blob reveal */
+		}
+
+		*,
+		*::before,
+		*::after {
+			box-sizing: border-box;
+			margin: 0;
+			padding: 0;
+		}
+
+		html,
+		body {
+			height: 100%;
+			overflow: hidden;
+		}
+
+		body {
+			background: var(--bg);
+			color: var(--text);
+			font-family: var(--font-mono);
+			font-size: 17px;
+			line-height: 1.65;
+			-webkit-font-smoothing: antialiased;
+		}
+
+		/* ── Background layers ───────────────────────────────────────────── */
+
+		/* Layer 0: blurred image — revealed by the mask hole in #glass-overlay */
+		#bg-image {
+			position: fixed;
+			inset: -100px;
+			/* overshoot to hide blur edges */
+			z-index: 0;
+			pointer-events: none;
+			background-size: cover;
+			background-position: center;
+			background-repeat: no-repeat;
+			filter: blur(80px);
+			opacity: var(--reveal-opacity);
+		}
+
+		/* cross plusses — black, in front of the glass */
+		body::after {
+			content: '';
+			position: fixed;
+			inset: 0;
+			z-index: 2;
+			pointer-events: none;
+			background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='40' height='40'%3E%3Cline x1='20' y1='14' x2='20' y2='26' stroke='rgba(0,0,0,0.55)' stroke-width='1' stroke-linecap='round'/%3E%3Cline x1='14' y1='20' x2='26' y2='20' stroke='rgba(0,0,0,0.55)' stroke-width='1' stroke-linecap='round'/%3E%3C/svg%3E");
+			background-size: 40px 40px;
+			opacity: 0.5;
+		}
+
+		/* Layer 1: solid dark cover — hole punched by JS reveals #bg-image beneath */
+		#glass-overlay {
+			position: fixed;
+			inset: 0;
+			z-index: 1;
+			pointer-events: none;
+			background: #07090F;
+			mask-image: radial-gradient(circle 260px at 50% 50%, transparent 30%, black 85%);
+			-webkit-mask-image: radial-gradient(circle 260px at 50% 50%, transparent 30%, black 85%);
+		}
+
+		/* ── Layout ──────────────────────────────────────────────────────── */
+		#app {
+			position: relative;
+			z-index: 3;
+			display: flex;
+			flex-direction: column;
+			justify-content: center;
+			/* center input when empty */
+			height: 100vh;
+			max-width: 950px;
+			margin: 0 auto;
+			padding: 0 30px;
+			transition: justify-content 0s;
+		}
+
+		/* Once chat starts, switch to a real chat layout */
+		#app.chat-active {
+			justify-content: flex-start;
+		}
+
+		/* ── Messages ────────────────────────────────────────────────────── */
+		#messages {
+			display: none;
+			/* hidden until first message */
+			flex-direction: column;
+			gap: 15px;
+			overflow-y: auto;
+			padding: 40px 0 20px;
+			/* grows to fill all available space above the input */
+		}
+
+		#app.chat-active #messages {
+			display: flex;
+			flex: 1;
+		}
+
+		#messages::-webkit-scrollbar {
+			width: 3px;
+		}
+
+		#messages::-webkit-scrollbar-track {
+			background: transparent;
+		}
+
+		#messages::-webkit-scrollbar-thumb {
+			background: var(--glass-border);
+			border-radius: 2px;
+		}
+
+		/* ── Message ─────────────────────────────────────────────────────── */
+		.message {
+			display: flex;
+			flex-direction: column;
+			gap: 5px;
+			max-width: 82%;
+			opacity: 0;
+			transform: translateY(8px);
+			transition: opacity 0.3s var(--ease), transform 0.3s var(--ease);
+		}
+
+		.message--visible {
+			opacity: 1;
+			transform: none;
+		}
+
+		.message--user {
+			align-self: flex-end;
+		}
+
+		.message--assistant {
+			align-self: flex-start;
+		}
+
+		.message__role {
+			font-family: var(--font-ui);
+			font-size: 0.75rem;
+			font-weight: 500;
+			letter-spacing: 0.1em;
+			text-transform: uppercase;
+			color: var(--text-muted);
+			padding: 0 5px;
+		}
+
+		.message--user .message__role {
+			color: var(--accent);
+			opacity: 0.75;
+			text-align: right;
+		}
+
+		.message__body {
+			padding: 14px 19px;
+			border-radius: 18px;
+			border: 1px solid var(--glass-border);
+			background: var(--glass);
+			backdrop-filter: blur(var(--blur));
+			-webkit-backdrop-filter: blur(var(--blur));
+			color: var(--text);
+			line-height: 1.7;
+			word-break: break-word;
+			white-space: pre-wrap;
+		}
+
+		.message--user .message__body {
+			background: var(--glass-user);
+			border-color: var(--glass-user-b);
+			border-radius: 18px 18px 4px 18px;
+		}
+
+		.message--assistant .message__body {
+			border-radius: 18px 18px 18px 4px;
+		}
+
+		/* Thinking dots */
+		.message--thinking .message__body {
+			padding: 16px 22px;
+		}
+
+		.thinking-dots {
+			display: flex;
+			gap: 6px;
+			align-items: center;
+			height: 16px;
+		}
+
+		.thinking-dots span {
+			width: 6px;
+			height: 6px;
+			border-radius: 50%;
+			background: var(--accent);
+			opacity: 0.45;
+			animation: dot 1.2s ease-in-out infinite;
+		}
+
+		.thinking-dots span:nth-child(2) {
+			animation-delay: 0.15s;
+		}
+
+		.thinking-dots span:nth-child(3) {
+			animation-delay: 0.30s;
+		}
+
+		@keyframes dot {
+
+			0%,
+			60%,
+			100% {
+				transform: translateY(0);
+				opacity: 0.35;
+			}
+
+			30% {
+				transform: translateY(-6px);
+				opacity: 1;
+			}
+		}
+
+		/* Sources */
+		.message__sources {
+			padding: 0 5px;
+		}
+
+		.message__sources summary {
+			font-family: var(--font-ui);
+			font-size: 0.75rem;
+			color: var(--text-faint);
+			letter-spacing: 0.06em;
+			cursor: pointer;
+			list-style: none;
+			user-select: none;
+			transition: color 0.2s;
+		}
+
+		.message__sources summary::-webkit-details-marker {
+			display: none;
+		}
+
+		.message__sources summary::before {
+			content: '▸ ';
+			font-size: 0.65rem;
+			display: inline-block;
+			transition: transform 0.15s;
+		}
+
+		.message__sources[open] summary::before {
+			transform: rotate(90deg);
+		}
+
+		.message__sources summary:hover {
+			color: var(--text-muted);
+		}
+
+		.source-item {
+			margin-top: 6px;
+			padding: 9px 13px;
+			background: var(--glass);
+			border: 1px solid var(--glass-border);
+			border-radius: 10px;
+			font-size: 0.85rem;
+			color: var(--text-muted);
+			line-height: 1.55;
+		}
+
+		/* Error */
+		.message--error .message__body {
+			border-color: rgba(255, 90, 90, 0.22);
+			color: rgba(255, 160, 160, 0.9);
+		}
+
+		/* ── Input area ──────────────────────────────────────────────────── */
+		#input-area {
+			flex-shrink: 0;
+			padding: 0 0 24px;
+			display: flex;
+			flex-direction: column;
+			gap: 9px;
+		}
+
+		/* Add top padding when in chat mode to separate from messages */
+		#app.chat-active #input-area {
+			padding-top: 14px;
+		}
+
+		#input-glass {
+			display: flex;
+			align-items: center;
+			gap: 10px;
+			background: var(--glass);
+			border: 1px solid var(--glass-border);
+			border-radius: 22px;
+			padding: 10px 10px 10px 20px;
+			backdrop-filter: blur(var(--blur));
+			-webkit-backdrop-filter: blur(var(--blur));
+			transition: border-color 0.25s, box-shadow 0.25s;
+		}
+
+		#input-glass:focus-within {
+			border-color: var(--accent-dim);
+			box-shadow: 0 0 0 1px var(--accent-dim);
+		}
+
+		#input {
+			flex: 1;
+			background: transparent;
+			border: none;
+			outline: none;
+			color: var(--text);
+			font-family: var(--font-mono);
+			font-size: 17px;
+			line-height: 1.6;
+			resize: none;
+			min-height: 26px;
+			max-height: 200px;
+			overflow-y: auto;
+			padding: 0;
+			scrollbar-width: thin;
+			scrollbar-color: var(--glass-border) transparent;
+		}
+
+		#input::placeholder {
+			color: var(--text-faint);
+		}
+
+		#send {
+			flex-shrink: 0;
+			width: 42px;
+			height: 42px;
+			border-radius: 13px;
+			border: none;
+			background: var(--accent);
+			color: #07090F;
+			cursor: pointer;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			transition: background 0.2s, transform 0.15s;
+		}
+
+		#send:hover {
+			background: #7AABFF;
+			transform: scale(1.04);
+		}
+
+		#send:active {
+			transform: scale(0.95);
+		}
+
+		#send:disabled {
+			background: var(--glass-border);
+			opacity: 0.45;
+			cursor: not-allowed;
+			transform: none;
+		}
+
+		/* Session row */
+		#session-row {
+			display: flex;
+			align-items: center;
+			gap: 10px;
+			padding: 0 5px;
+			opacity: 0.45;
+			pointer-events: none;
+			user-select: none;
+		}
+
+		#session-row * {
+			font-family: var(--font-ui);
+			font-size: 0.72rem;
+			letter-spacing: 0.08em;
+			color: var(--text-faint);
+			background: none;
+			border: none;
+			cursor: default;
+		}
+
+		#session-new {
+			margin-left: auto;
+		}
 	</style>
 </head>
+
 <body>
+	<div id="bg-image"></div>
+	<div id="glass-overlay"></div>
 	<div id="app">
-		<header>
-			<h1>shard chat</h1>
-		</header>
 		<div id="messages"></div>
+
 		<div id="input-area">
-			<textarea id="input" rows="1" placeholder="Ask something..."></textarea>
-			<button id="send">send</button>
+			<div id="input-glass">
+				<textarea id="input" rows="1" placeholder="Ask anything…" autocomplete="off" spellcheck="false"></textarea>
+				<button id="send">
+					<svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+						<path d="M2 9h14M10 3l6 6-6 6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"
+							stroke-linejoin="round" />
+					</svg>
+				</button>
+			</div>
+			<div id="session-row">
+				<span>session</span>
+				<span id="session-name">default</span>
+				<span id="session-new">+ new</span>
+			</div>
 		</div>
 	</div>
-	<script>
-		const messages = document.getElementById('messages');
-		const input = document.getElementById('input');
-		const sendBtn = document.getElementById('send');
 
-		function addMessage(role, content) {
-			const div = document.createElement('div');
-			div.className = `message ${role}`;
-			div.innerHTML = `<div class="role">${role}</div><div class="content">${content}</div>`;
-			messages.appendChild(div);
-			messages.scrollTop = messages.scrollHeight;
-		}
+	<script type="module">
+		// ── Config ──────────────────────────────────────────────────────────
+		const Config = Object.freeze({
+			endpoints: { ask: '/ask', chat: '/chat' },
+			backend: 'ask',
+		});
 
-		async function send() {
-			const text = input.value.trim();
-			if (!text) return;
-			input.value = '';
-			addMessage('user', text);
-			const loading = document.createElement('div');
-			loading.className = 'message assistant loading';
-			loading.textContent = 'thinking...';
-			messages.appendChild(loading);
-			sendBtn.disabled = true;
-			try {
-				const res = await fetch('/chat', {
+		// ── API ─────────────────────────────────────────────────────────────
+		const API = {
+			async _post(url, body) {
+				const res = await fetch(url, {
 					method: 'POST',
 					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({ messages: [{ role: 'user', content: text }] })
+					body: JSON.stringify(body),
 				});
-				const data = await res.json();
-				loading.remove();
-				addMessage('assistant', data.content || 'No response');
-			} catch (e) {
-				loading.remove();
-				addMessage('assistant', 'Error: ' + e.message);
-			}
-			sendBtn.disabled = false;
+				if (!res.ok) throw new Error(`HTTP ${res.status}`);
+				return res.json();
+			},
+			ask(query) { return this._post(Config.endpoints.ask, { query }); },
+			chat(messages, opts = {}) { return this._post(Config.endpoints.chat, { messages, ...opts }); },
+			query(text, sessionCtx = null) {
+				if (Config.backend === 'chat') {
+					const msgs = sessionCtx?.history ?? [{ role: 'user', content: text }];
+					return this.chat(msgs).then(d => ({ answer: d.content, sources: [] }));
+				}
+				return this.ask(text);
+			},
+		};
+
+		// ── State ───────────────────────────────────────────────────────────
+		const State = {
+			sessions: new Map(),
+			activeId: null,
+			get active() { return this.sessions.get(this.activeId); },
+			createSession(id = crypto.randomUUID()) {
+				this.sessions.set(id, { id, title: null, createdAt: Date.now(), messages: [] });
+				return id;
+			},
+			setActive(id) {
+				if (!this.sessions.has(id)) this.createSession(id);
+				this.activeId = id;
+			},
+			addMessage({ role, content, sources = null, error = false }) {
+				const msg = { id: crypto.randomUUID(), role, content, sources, error, timestamp: Date.now() };
+				this.active.messages.push(msg);
+				return msg;
+			},
+			chatHistory() {
+				return this.active.messages.map(m => ({ role: m.role, content: m.content }));
+			},
+			init() { this.setActive(this.createSession()); },
+		};
+
+		// ── MessageComponent ────────────────────────────────────────────────
+		const MessageComponent = {
+			create(msg) {
+				const el = document.createElement('div');
+				el.className = `message message--${msg.role}`;
+				if (msg.error) el.classList.add('message--error');
+				el.dataset.id = msg.id;
+
+				const roleEl = document.createElement('div');
+				roleEl.className = 'message__role';
+				roleEl.textContent = msg.role === 'user' ? 'you' : 'shard';
+
+				const body = document.createElement('div');
+				body.className = 'message__body';
+				body.textContent = msg.content;
+
+				el.appendChild(roleEl);
+				el.appendChild(body);
+
+				if (msg.sources?.length) {
+					const details = document.createElement('details');
+					details.className = 'message__sources';
+					const summary = document.createElement('summary');
+					summary.textContent = `${msg.sources.length} source${msg.sources.length !== 1 ? 's' : ''}`;
+					details.appendChild(summary);
+					msg.sources.forEach(s => {
+						const item = document.createElement('div');
+						item.className = 'source-item';
+						item.textContent = s.text ?? s.thought ?? s.content ?? JSON.stringify(s);
+						details.appendChild(item);
+					});
+					el.appendChild(details);
+				}
+
+				requestAnimationFrame(() => requestAnimationFrame(() => el.classList.add('message--visible')));
+				return el;
+			},
+
+			createThinking() {
+				const el = document.createElement('div');
+				el.className = 'message message--assistant message--thinking';
+				el.innerHTML = `
+					<div class="message__role">shard</div>
+					<div class="message__body">
+						<div class="thinking-dots"><span></span><span></span><span></span></div>
+					</div>`;
+				requestAnimationFrame(() => requestAnimationFrame(() => el.classList.add('message--visible')));
+				return el;
+			},
+		};
+
+		// ── UI ──────────────────────────────────────────────────────────────
+		const UI = {
+			init() {
+				this.appEl = document.getElementById('app');
+				this.messagesEl = document.getElementById('messages');
+				this.inputEl = document.getElementById('input');
+				this.sendEl = document.getElementById('send');
+				this.inputEl.addEventListener('input', () => this._resize());
+			},
+			_resize() {
+				this.inputEl.style.height = 'auto';
+				this.inputEl.style.height = Math.min(this.inputEl.scrollHeight, 200) + 'px';
+			},
+			activateChat() {
+				this.appEl.classList.add('chat-active');
+			},
+			addMessage(msg) {
+				const el = MessageComponent.create(msg);
+				this.messagesEl.appendChild(el);
+				this._scroll();
+				return el;
+			},
+			showThinking() {
+				const el = MessageComponent.createThinking();
+				this.messagesEl.appendChild(el);
+				this._scroll();
+				return el;
+			},
+			removeThinking(el) { el?.remove(); },
+			_scroll() {
+				this.messagesEl.scrollTo({ top: this.messagesEl.scrollHeight, behavior: 'smooth' });
+			},
+			setLoading(v) {
+				this.sendEl.disabled = v;
+				this.inputEl.disabled = v;
+				if (!v) { this.inputEl.focus(); this._resize(); }
+			},
+			getInput() { return this.inputEl.value.trim(); },
+			clearInput() { this.inputEl.value = ''; this.inputEl.style.height = 'auto'; },
+			onSend(fn) {
+				this.sendEl.addEventListener('click', fn);
+				this.inputEl.addEventListener('keydown', e => {
+					if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); fn(); }
+				});
+			},
+		};
+
+		// ── App ─────────────────────────────────────────────────────────────
+		const App = {
+			started: false,
+			async init() {
+				UI.init();
+				State.init();
+				UI.onSend(() => this.send());
+				UI.inputEl.focus();
+			},
+			async send() {
+				const text = UI.getInput();
+				if (!text) return;
+
+				if (!this.started) {
+					this.started = true;
+					UI.activateChat();
+				}
+
+				UI.clearInput();
+				UI.setLoading(true);
+
+				const userMsg = State.addMessage({ role: 'user', content: text });
+				UI.addMessage(userMsg);
+
+				const thinking = UI.showThinking();
+
+				try {
+					const result = await API.query(text, { history: State.chatHistory() });
+					UI.removeThinking(thinking);
+					const reply = State.addMessage({
+						role: 'assistant',
+						content: result.answer ?? result.content ?? '—',
+						sources: result.sources ?? null,
+					});
+					UI.addMessage(reply);
+				} catch (err) {
+					UI.removeThinking(thinking);
+					const errMsg = State.addMessage({ role: 'assistant', content: `Error: ${err.message}`, error: true });
+					UI.addMessage(errMsg);
+				} finally {
+					UI.setLoading(false);
+				}
+			},
+		};
+
+		App.init();
+
+		// ── Random Pexels background ────────────────────────────────────────
+		const BG_IMAGES = [
+			// 'https://images.pexels.com/photos/18337612/pexels-photo-18337612.jpeg?auto=compress&cs=tinysrgb&w=1920', // neon cyber grid city
+			// 'https://images.pexels.com/photos/3251991/pexels-photo-3251991.jpeg?auto=compress&cs=tinysrgb&w=1920',  // rainy nights city lights
+			// 'https://images.pexels.com/photos/1526/dark-blur-blurred-gradient.jpg?auto=compress&cs=tinysrgb&w=1920', // dark gradient blur
+			// 'https://images.pexels.com/photos/15578335/pexels-photo-15578335.png?auto=compress&cs=tinysrgb&w=1920',  // moody warm abstract
+			// 'https://images.pexels.com/photos/29576128/pexels-photo-29576128.jpeg?auto=compress&cs=tinysrgb&w=1920', // bw bridge night
+			'https://images.pexels.com/photos/2080960/pexels-photo-2080960.jpeg?auto=compress&cs=tinysrgb&w=1920', // bw bridge night
+		];
+		const pick = BG_IMAGES[Math.floor(Math.random() * BG_IMAGES.length)];
+		document.getElementById('bg-image').style.backgroundImage = `url('${pick}')`;
+
+		// ── Reveal-hole tracking ────────────────────────────────────────────
+		const glassEl = document.getElementById('glass-overlay');
+		const bgEl = document.getElementById('bg-image');
+		const BLOB_R = 900;
+		const BASE_OPACITY = parseFloat(
+			getComputedStyle(document.documentElement).getPropertyValue('--reveal-opacity')
+		) || 0.75;
+		const FADE_START = 200, FADE_END = 40;
+
+		let bx = window.innerWidth / 2, by = window.innerHeight / 2;
+		let tx = bx, ty = by;
+		let currentOpacity = BASE_OPACITY;
+		let currentR = BLOB_R;
+
+		document.addEventListener('mousemove', e => { tx = e.clientX; ty = e.clientY; });
+
+		function distToRect(x, y, rect) {
+			const dx = Math.max(rect.left - x, 0, x - rect.right);
+			const dy = Math.max(rect.top - y, 0, y - rect.bottom);
+			return Math.hypot(dx, dy);
 		}
 
-		sendBtn.addEventListener('click', send);
-		input.addEventListener('keydown', e => {
-			if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
-		});
-		input.focus();
+		function nearestInteractable(x, y) {
+			const els = document.querySelectorAll('button, textarea, input, a, [tabindex]');
+			let min = Infinity;
+			els.forEach(el => {
+				const d = distToRect(x, y, el.getBoundingClientRect());
+				if (d < min) min = d;
+			});
+			return min;
+		}
+
+		(function lerp() {
+			bx += (tx - bx) * 0.08;
+			by += (ty - by) * 0.08;
+
+			const dist = nearestInteractable(bx, by);
+			// t=1 far away, t=0 right on element — both opacity and size go to half at t=0
+			const t = Math.min(Math.max((dist - FADE_END) / (FADE_START - FADE_END), 0), 1);
+			const targetOpacity = BASE_OPACITY * (0.5 + 0.5 * t);
+			const targetR = BLOB_R * (0.5 + 0.5 * t);
+
+			currentOpacity += (targetOpacity - currentOpacity) * 0.08;
+			currentR += (targetR - currentR) * 0.08;
+
+			bgEl.style.opacity = currentOpacity;
+			const mask = `radial-gradient(circle ${currentR}px at ${bx}px ${by}px, transparent 0%, black 100%)`;
+			glassEl.style.maskImage = mask;
+			glassEl.style.webkitMaskImage = mask;
+
+			requestAnimationFrame(lerp);
+		})();
 	</script>
 </body>
+
 </html>

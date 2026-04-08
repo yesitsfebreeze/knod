@@ -9,9 +9,8 @@ from shard.config import Config
 print("=== Testing Shard MCP ===")
 
 cfg = Config.load()
-print(f"API: {'Anthropic' if cfg.anthropic_api_key else 'OpenAI'}")
-print(f"Chat model: {cfg.chat_model}")
-print(f"Embedding model: {cfg.embedding_model}")
+print(f"Chat model: {cfg.anthropic_model}")
+print(f"Embedding model: {cfg.voyage_model}")
 
 # Test provider
 from shard.provider import Provider
