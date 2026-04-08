@@ -187,10 +187,10 @@ TOOL_DEFINITIONS = [
 class Provider:
 	def __init__(self, cfg: Config):
 		self._cfg = cfg
-		self._use_voyage = bool(cfg.voyage_api_key)
-		self._use_anthropic = bool(cfg.anthropic_api_key)
-		self._use_openai = bool(cfg.openai_api_key)
-		self._use_local = bool(cfg.local_base_url)
+		self._use_voyage = bool(cfg.voyage_api_key) and cfg.voyage_enabled
+		self._use_anthropic = bool(cfg.anthropic_api_key) and cfg.anthropic_enabled
+		self._use_openai = bool(cfg.openai_api_key) and cfg.openai_enabled
+		self._use_local = bool(cfg.local_base_url) and cfg.local_enabled
 
 		if self._use_voyage:
 			self._voyage = voyageai.Client(api_key=cfg.voyage_api_key)
