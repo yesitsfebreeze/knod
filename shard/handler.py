@@ -390,18 +390,18 @@ class Handler:
 			added_thought_ids = current["thought_ids"] - prev["thought_ids"]
 
 			new_thoughts = []
-			if added_thought_ids:
-				for tid in sorted(added_thought_ids):
+			for namespaced in sorted(added_thought_ids):
+				shard_name, _, tid_str = namespaced.partition(":")
+				tid = int(tid_str)
+				if shard_name == "":
 					t = self.graph.thoughts.get(tid)
-					if t:
-						new_thoughts.append(
-							{
-								"id": t.id,
-								"text": t.text,
-								"source": t.source,
-								"store": "global",
-							}
-						)
+					store = "global"
+				else:
+					shard = self._shards.get(shard_name)
+					t = shard.graph.thoughts.get(tid) if shard else None
+					store = shard_name
+				if t:
+					new_thoughts.append({"id": t.id, "text": t.text, "source": t.source, "store": store})
 
 			diff = {
 				"initial": False,
