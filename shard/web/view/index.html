@@ -117,8 +117,22 @@
 				</div>
 			</div>
 			<form id="ask-form" class="glass ask-form">
-				<input id="ask-input" type="text" placeholder="Ask the graph anything..." autocomplete="off">
-				<div id="ask-status" class="ask-status">Type to search thoughts and query the model. Esc closes.</div>
+				<div class="ask-input-row">
+					<input id="ask-input" type="text" placeholder="Ask the graph anything..." autocomplete="off">
+					<button id="ask-send" class="ask-send-btn" type="submit" aria-label="Send">
+						<span class="ask-send-icon ask-send-icon--arrow">
+							<svg width="15" height="15" viewBox="0 0 18 18" fill="none">
+								<path d="M2 9h14M10 3l6 6-6 6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+							</svg>
+						</span>
+						<span class="ask-send-icon ask-send-icon--spinner">
+							<svg width="15" height="15" viewBox="0 0 18 18" fill="none">
+								<circle cx="9" cy="9" r="6.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-dasharray="26 14"/>
+							</svg>
+						</span>
+					</button>
+				</div>
+				<div id="ask-status" class="ask-status">Type to search thoughts. Press Enter to ask the agent.</div>
 			</form>
 		</section>
 	</div>

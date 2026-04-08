@@ -334,7 +334,7 @@ let recencyRecentKey = "cyan";
 let recencyOldKey = "magenta";
 const RECENCY_COLOR_OPTIONS = ["red", "orange", "yellow", "green", "cyan", "blue", "magenta", "brown"];
 let currentTheme = THEMES.find(theme => theme.id === DEFAULT_THEME_ID) || THEMES[0];
-let askState = { open: false, lastFocused: null, debounceId: null, requestSeq: 0, controller: null };
+let askState = { open: false, lastFocused: null, debounceId: null, requestSeq: 0, controller: null, serverSessionId: null };
 
 // orbit
 let yaw = 0.3, pitch = -0.5, dist = 3;
@@ -1803,7 +1803,12 @@ function appendThoughts(batch) {
 		nd.color = recencyColor(nd.recency);
 		all_nodes.push(nd); thought_nodes.push(nd); node_idx[nd.key] = nd;
 	}
-	// Resolve any raw edges whose endpoints are now both loaded
+	resolveEdges();
+	recolorNodesForTheme();
+	refresh_scene_buffers();
+}
+
+function resolveEdges() {
 	const edgeSet = new Set(edges.map(e => `${e.s.key}|${e.t.key}`));
 	for (const e of [...rawEdgeData.edges, ...(rawEdgeData.knn_edges || [])]) {
 		const s = node_idx[e.source], t = node_idx[e.target];
@@ -1823,8 +1828,6 @@ function appendThoughts(batch) {
 		(edgeAdj[s.key] ||= []).push(edgeObj);
 		(edgeAdj[t.key] ||= []).push(edgeObj);
 	}
-	recolorNodesForTheme();
-	refresh_scene_buffers();
 }
 
 // ---- WebGPU init ----
@@ -2593,6 +2596,17 @@ function setupAskUI() {
 	const thoughts = document.getElementById("ask-thoughts");
 	const thoughtsList = document.getElementById("ask-thoughts-list");
 
+	const sendBtn = document.getElementById("ask-send");
+
+	const setLoading = (v) => {
+		input.disabled = v;
+		if (sendBtn) {
+			sendBtn.classList.toggle("loading", v);
+			sendBtn.disabled = v;
+		}
+		if (!v) requestAnimationFrame(() => input.focus());
+	};
+
 	const cancelPending = () => {
 		if (askState.debounceId) {
 			clearTimeout(askState.debounceId);
@@ -2678,64 +2692,53 @@ function setupAskUI() {
 		answerText.textContent = answerValue || "";
 	};
 
-	const requestAnswer = async (query, { immediate = false } = {}) => {
+	const requestAnswer = async (query) => {
 		cancelPending();
 
 		const trimmed = query.trim();
-		if (trimmed.length < 3) {
+		if (trimmed.length < 2) {
 			answer.hidden = true;
-			setStatus(trimmed.length ? "Keep typing to query the model." : "Type to search thoughts and query the model. Esc closes.");
+			setStatus("Type to search thoughts and query the model. Esc closes.");
 			return;
 		}
 
-		const run = async () => {
-			const seq = ++askState.requestSeq;
-			const controller = new AbortController();
-			askState.controller = controller;
-			setStatus("Thinking...");
-			try {
-				const response = await fetch("/ask", {
-					method: "POST",
-					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({ query: trimmed }),
-					signal: controller.signal,
-				});
-				if (!response.ok) throw new Error(`Request failed (${response.status})`);
-				const payload = await response.json();
-				if (seq !== askState.requestSeq) return;
-				renderAnswer(payload?.answer || "No answer returned.");
-				setStatus("Live answer. Press Enter to refresh or Esc to close.");
-			} catch (error) {
-				if (controller.signal.aborted) return;
-				if (seq !== askState.requestSeq) return;
-				renderAnswer("The model could not answer that right now.");
-				setStatus(error instanceof Error ? error.message : "Query failed.");
-			} finally {
-				if (askState.controller === controller) askState.controller = null;
-			}
-		};
-
-		if (immediate) {
-			run();
-			return;
+		const seq = ++askState.requestSeq;
+		const controller = new AbortController();
+		askState.controller = controller;
+		setLoading(true);
+		setStatus("Thinking…");
+		try {
+			const response = await fetch("/agent", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ message: trimmed, session_id: askState.serverSessionId }),
+				signal: controller.signal,
+			});
+			if (!response.ok) throw new Error(`Request failed (${response.status})`);
+			const payload = await response.json();
+			if (seq !== askState.requestSeq) return;
+			if (payload.session_id) askState.serverSessionId = payload.session_id;
+			renderAnswer(payload?.content || payload?.answer || "No answer returned.");
+			setStatus("Enter to send · Esc to close");
+		} catch (error) {
+			if (controller.signal.aborted) return;
+			if (seq !== askState.requestSeq) return;
+			renderAnswer("The model could not answer that right now.");
+			setStatus(error instanceof Error ? error.message : "Query failed.");
+		} finally {
+			if (askState.controller === controller) askState.controller = null;
+			setLoading(false);
 		}
-
-		askState.debounceId = setTimeout(run, 320);
-	};
-
-	const syncQueryState = (value, options = {}) => {
-		renderThoughtMatches(value);
-		requestAnswer(value, options);
 	};
 
 	form.addEventListener("submit", event => {
 		event.preventDefault();
-		syncQueryState(input.value, { immediate: true });
+		requestAnswer(input.value);
 	});
 
 	input.addEventListener("input", () => {
 		if (!input.value.trim()) resetResults();
-		syncQueryState(input.value);
+		renderThoughtMatches(input.value);
 	});
 
 	overlay.addEventListener("click", event => {
@@ -2751,7 +2754,7 @@ function setupAskUI() {
 			}
 			if (event.key === "Enter" && document.activeElement === input) {
 				event.preventDefault();
-				syncQueryState(input.value, { immediate: true });
+				requestAnswer(input.value);
 			}
 			return;
 		}
@@ -3026,20 +3029,35 @@ if (metaData) {
 
 // ---- live poll for updates ----
 let lastThoughtCount = metaData?.total_thoughts ?? thought_nodes.length;
+let lastEdgeCount = metaData?.edges?.length ?? edges.length;
 let pollInterval = null;
 
 async function pollForUpdates() {
 	try {
 		const diff = await (await fetch("/diff")).json();
+		let changed = false;
+
 		if (diff.added_count > 0) {
-			console.log(`New thoughts: ${diff.added_count}`);
 			const newData = await (await fetch(`/graph/thoughts?offset=${lastThoughtCount}&limit=${diff.added_count}`)).json();
 			if (newData.nodes?.length) appendThoughts(newData.nodes);
-			document.getElementById("s-nodes").textContent = thought_nodes.length;
-			document.getElementById("s-edges").textContent = edges.length;
 			lastThoughtCount = diff.thought_count;
+			changed = true;
 		} else if (diff.initial) {
 			lastThoughtCount = diff.thought_count;
+		}
+
+		if (diff.edge_count !== undefined && diff.edge_count !== lastEdgeCount) {
+			const meta = await (await fetch("/graph/meta")).json();
+			rawEdgeData = { edges: meta.edges || [], knn_edges: meta.knn_edges || [] };
+			resolveEdges();
+			lastEdgeCount = diff.edge_count;
+			changed = true;
+		}
+
+		if (changed) {
+			document.getElementById("s-nodes").textContent = thought_nodes.length;
+			document.getElementById("s-edges").textContent = edges.length;
+			refresh_scene_buffers();
 		}
 	} catch (e) {
 		console.error("Poll error:", e);

@@ -10,6 +10,8 @@ log = logging.getLogger(__name__)
 _FALLBACK_ERRORS = (RateLimitError, APITimeoutError, APIConnectionError, APIStatusError, AuthenticationError)
 
 
+QUERY_TOOL_NAMES = {"ask", "find_thoughts", "explore_thought", "traverse", "graph_stats", "list_shards"}
+
 TOOL_DEFINITIONS = [
 	{
 		"type": "function",
@@ -401,17 +403,18 @@ class Provider:
 		resp = self._chat(model=self.chat_model, messages=messages, **kwargs)
 		return resp.choices[0].message.content
 
-	def chat_with_tools(self, messages: list[dict], tool_handler, **kwargs) -> tuple[str, list[dict]]:
+	def chat_with_tools(self, messages: list[dict], tool_handler, tools: list[dict] | None = None, **kwargs) -> tuple[str, list[dict]]:
 		tool_calls = []
 		max_turns = 10
 		turn = 0
+		active_tools = tools if tools is not None else TOOL_DEFINITIONS
 
 		while turn < max_turns:
 			turn += 1
 			resp = self._chat(
 				model=self.chat_model,
 				messages=messages,
-				tools=TOOL_DEFINITIONS,
+				tools=active_tools,
 				**kwargs,
 			)
 

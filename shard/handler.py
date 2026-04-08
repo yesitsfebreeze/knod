@@ -76,6 +76,7 @@ class Handler:
 		self._last_poll_state: dict = {}
 		self._last_poll_state_lock = threading.Lock()
 		self._last_shard_state: dict[str, tuple[int, int]] = {}  # name -> (thoughts, edges)
+		self._graph_file_mtime: float = 0.0  # mtime of graph.shard as we last wrote/read it
 
 	def init(self):
 		base = Path(self.cfg.graph_path).with_suffix("")
@@ -83,13 +84,17 @@ class Handler:
 
 		if shard_file.exists():
 			log.info("Loading existing graph from %s", shard_file)
-			self.graph, self.model, self.shard = load_all(self.cfg, base)
-			# load_all already loaded the base model via warm_start.
-			# Only bootstrap if base.gnn was somehow missing.
-			if not Path(self.cfg.base_gnn_path).exists():
-				save_base_model(self.model, self.cfg)
-				log.info("Bootstrapped base model: %s", self.cfg.base_gnn_path)
-		else:
+			try:
+				self.graph, self.model, self.shard = load_all(self.cfg, base)
+				# load_all already loaded the base model via warm_start.
+				# Only bootstrap if base.gnn was somehow missing.
+				if not Path(self.cfg.base_gnn_path).exists():
+					save_base_model(self.model, self.cfg)
+					log.info("Bootstrapped base model: %s", self.cfg.base_gnn_path)
+			except (ValueError, Exception) as e:
+				log.warning("Failed to load %s (%s) — starting fresh", shard_file, e)
+				shard_file.unlink(missing_ok=True)
+		if not hasattr(self, "graph"):
 			log.info("Creating new graph")
 			self.graph = Graph(
 				max_thoughts=self.cfg.max_thoughts,
@@ -118,6 +123,11 @@ class Handler:
 		self._limbo_thread = threading.Thread(target=self._limbo_scan_loop, daemon=True)
 		self._limbo_thread.start()
 
+		# Record mtime so we can detect external writes to graph.shard
+		shard_file = Path(self.cfg.graph_path)
+		if shard_file.exists():
+			self._graph_file_mtime = shard_file.stat().st_mtime
+
 		# Start store polling (every 5 seconds)
 		self._poll_thread = threading.Thread(target=self._poll_loop, daemon=True)
 		self._poll_thread.start()
@@ -125,6 +135,9 @@ class Handler:
 	def save(self):
 		base = Path(self.cfg.graph_path).with_suffix("")
 		save_all(self.graph, self.model, self.shard, base)
+		shard_file = Path(self.cfg.graph_path)
+		if shard_file.exists():
+			self._graph_file_mtime = shard_file.stat().st_mtime
 
 	def shutdown(self):
 		self._shutdown.set()
@@ -268,6 +281,8 @@ class Handler:
 		top_score = scored[0][1]
 		if top_score >= self.cfg.confidence_threshold:
 			log.info("Confidence gate: top_score=%.3f >= %.3f, skipping LLM", top_score, self.cfg.confidence_threshold)
+			touched_ids = [t.id for t, _ in scored]
+			threading.Thread(target=self._think, args=(touched_ids,), daemon=True).start()
 			return synthesize_direct(scored)
 
 		text, sources = answer(query, scored, self.provider, chains=relevant_chains or None)
@@ -275,6 +290,11 @@ class Handler:
 		# Ingest the LLM answer back into the graph so future similar queries
 		# can be answered directly — the learning flywheel.
 		self.enqueue(text, source="query_response")
+
+		# Thinking pass: relink the thoughts that were just touched.
+		# Runs in background — never blocks the caller.
+		touched_ids = [t.id for t, _ in scored]
+		threading.Thread(target=self._think, args=(touched_ids,), daemon=True).start()
 
 		# Periodic edge refinement based on retrieval feedback
 		self._retrieval_count += 1
@@ -329,10 +349,19 @@ class Handler:
 		"""Get diff from last poll. Returns added/changed items since last call."""
 		current_stores = set(self.registry.list_stores().keys())
 
+		thought_count = self.graph.num_thoughts
+		edge_count = self.graph.num_edges
+		thought_ids: set = {f":{k}" for k in self.graph.thoughts.keys()}
+		for name, shard in self._shards.items():
+			thought_count += shard.graph.num_thoughts
+			edge_count += shard.graph.num_edges
+			for k in shard.graph.thoughts.keys():
+				thought_ids.add(f"{name}:{k}")
+
 		current = {
-			"thought_count": self.graph.num_thoughts,
-			"edge_count": self.graph.num_edges,
-			"thought_ids": set(self.graph.thoughts.keys()),
+			"thought_count": thought_count,
+			"edge_count": edge_count,
+			"thought_ids": thought_ids,
 			"limbo_count": len(self.graph.limbo),
 			"queue_size": self._queue.qsize() if self._queue else 0,
 			"in_flight": 1 if self._in_flight.is_set() else 0,
@@ -450,6 +479,116 @@ class Handler:
 		ingester = Ingester(s.graph, self.provider, self.cfg)
 		result = ingester.ingest(text, source=source, descriptor=descriptor)
 		return len(result.committed)
+
+	def link_thoughts(
+		self,
+		source_id: int,
+		target_id: int,
+		reasoning: str = "",
+		confidence: float = 0.0,
+		shard_name: str | None = None,
+	) -> dict:
+		"""Directly link two thoughts.
+
+		The LLM always scores the relationship. `confidence` (0.0–1.0) acts as
+		an inverse multiplier on that score:
+
+		  multiplier = 1 / (1 - confidence)
+		  weight     = min(1.0, llm_weight * multiplier)
+
+		At confidence=0 the LLM weight is used as-is. As confidence rises the
+		multiplier grows, boosting the weight toward 1.0. At confidence=1 the
+		link is forced to maximum weight regardless of the LLM score.
+
+		If reasoning is provided it replaces the LLM's reasoning text while the
+		weight is still derived from the LLM score times the confidence boost.
+		"""
+		if shard_name and shard_name not in self._shards:
+			return {"ok": False, "error": f"Shard '{shard_name}' not found"}
+		graph = self._shards[shard_name].graph if shard_name else self.graph
+
+		src = graph.thoughts.get(source_id)
+		tgt = graph.thoughts.get(target_id)
+		if src is None:
+			return {"ok": False, "error": f"Thought {source_id} not found"}
+		if tgt is None:
+			return {"ok": False, "error": f"Thought {target_id} not found"}
+
+		results = self.provider.batch_link_reason(src.text, [tgt.text])
+		if not results:
+			return {"ok": False, "error": "LLM found no meaningful link"}
+
+		llm_weight = results[0]["weight"]
+		multiplier = 1.0 / max(1.0 - confidence, 1e-6)
+		weight = min(1.0, llm_weight * multiplier)
+		final_reasoning = reasoning if reasoning else results[0]["reasoning"]
+
+		emb = self.provider.embed_text(final_reasoning)
+		with self.mu:
+			edge = graph.add_edge(
+				source_id=source_id,
+				target_id=target_id,
+				weight=weight,
+				reasoning=final_reasoning,
+				embedding=emb,
+			)
+			self.save()
+
+		if edge is None:
+			return {"ok": False, "error": "Edge limit reached"}
+		return {
+			"ok": True,
+			"source_id": source_id,
+			"target_id": target_id,
+			"llm_weight": llm_weight,
+			"confidence": confidence,
+			"multiplier": round(multiplier, 3),
+			"weight": weight,
+			"reasoning": final_reasoning,
+		}
+
+	def forget(self, thought_id: int, shard_name: str | None = None) -> dict:
+		"""Remove a thought and its edges from the main graph or a named shard."""
+		with self.mu:
+			if shard_name:
+				shard = self._shards.get(shard_name)
+				if shard is None:
+					return {"ok": False, "error": f"Shard '{shard_name}' not found"}
+				found = shard.graph.forget_thought(thought_id)
+				if found:
+					base = Path(self.registry.stores[shard_name]["path"]).with_suffix("")
+					from .shard.store import save_all
+					save_all(shard.graph, shard.model, shard.shard, base)
+			else:
+				found = self.graph.forget_thought(thought_id)
+				if found:
+					self.save()
+		return {"ok": found, "thought_id": thought_id, "shard": shard_name or "global"}
+
+	def rebootstrap_shards(self, only_empty: bool = True) -> dict:
+		"""Re-run link + GNN bootstrap on loaded shards.
+
+		When only_empty=True (default), skips shards that already have edges.
+		Returns per-shard results.
+		"""
+		from .limbo.promote import bootstrap_thoughts
+		from .shard.store import save_all
+
+		results = {}
+		with self.mu:
+			for name, shard in self._shards.items():
+				if only_empty and shard.graph.num_edges > 0:
+					results[name] = {"skipped": True, "edges": shard.graph.num_edges}
+					continue
+				thought_ids = list(shard.graph.thoughts.keys())
+				before = shard.graph.num_edges
+				bootstrap_thoughts(thought_ids, shard.graph, shard.model, shard.shard, self.provider, self.cfg)
+				after = shard.graph.num_edges
+				base = Path(self.registry.stores[name]["path"]).with_suffix("")
+				save_all(shard.graph, shard.model, shard.shard, base)
+				results[name] = {"edges_before": before, "edges_after": after, "added": after - before}
+				log.info("Rebootstrap '%s': %d → %d edges", name, before, after)
+		return results
 
 	def ingested_sources(self) -> set[str]:
 		"""Return the set of all source strings already in the graph and all shards."""
@@ -607,11 +746,25 @@ class Handler:
 		return {"nodes": nodes, "edges": edges, "knn_edges": knn_edges}
 
 	def graph_meta(self) -> dict:
-		"""Lightweight snapshot: shard hub nodes + total thought count for fast initial render."""
+		"""Lightweight snapshot: shard hub nodes + all semantic edges for fast initial render."""
 		nodes = []
 		edges = []
 		seen: set[tuple[str, str]] = set()
 		total = self.graph.num_thoughts
+
+		# Global semantic edges
+		for e in self.graph.edges:
+			ek = (str(e.source_id), str(e.target_id))
+			if ek not in seen:
+				seen.add(ek)
+				edges.append({
+					"source": str(e.source_id),
+					"target": str(e.target_id),
+					"weight": round(e.weight, 3),
+					"reasoning": e.reasoning[:120],
+					"success_rate": round(e.success_rate, 3),
+				})
+
 		for name, shard in self._shards.items():
 			total += shard.graph.num_thoughts
 			hub_key = f"_shard:{name}"
@@ -624,6 +777,7 @@ class Handler:
 				"access_count": 0,
 				"created_at": 0,
 			})
+			# Hub membership edges
 			for t in shard.graph.thoughts.values():
 				ek = (hub_key, f"{name}:{t.id}")
 				if ek not in seen:
@@ -635,6 +789,19 @@ class Handler:
 						"reasoning": f"belongs to {name}",
 						"success_rate": 0.0,
 					})
+			# Shard semantic edges
+			for e in shard.graph.edges:
+				ek = (f"{name}:{e.source_id}", f"{name}:{e.target_id}")
+				if ek not in seen:
+					seen.add(ek)
+					edges.append({
+						"source": f"{name}:{e.source_id}",
+						"target": f"{name}:{e.target_id}",
+						"weight": round(e.weight, 3),
+						"reasoning": e.reasoning[:120],
+						"success_rate": round(e.success_rate, 3),
+					})
+
 		return {"nodes": nodes, "edges": edges, "knn_edges": [], "total_thoughts": total}
 
 	def graph_thoughts(self, offset: int = 0, limit: int = 200) -> dict:
@@ -716,6 +883,47 @@ class Handler:
 					created += 1
 
 		return created, scanned
+
+	def _think(self, thought_ids: list[int]) -> None:
+		"""Post-retrieval thinking: relink touched thoughts across all graphs.
+
+		Runs in a background daemon thread so it never blocks the answer.
+		Touched thoughts are those that scored highest during retrieval — the
+		ones most worth re-examining for new connections.
+		"""
+		if not thought_ids:
+			return
+
+		# Partition IDs by graph — each graph has its own ID space
+		global_ids = [tid for tid in thought_ids if tid in self.graph.thoughts]
+		shard_hits: list[tuple[str, "Shard"]] = [
+			(name, shard)
+			for name, shard in list(self._shards.items())
+			if any(tid in shard.graph.thoughts for tid in thought_ids)
+		]
+
+		total = 0
+		if global_ids:
+			created, _ = self._relink_thoughts(self.graph, global_ids)
+			total += created
+
+		touched_shards: list[tuple[str, "Shard"]] = []
+		for name, shard in shard_hits:
+			ids = [tid for tid in thought_ids if tid in shard.graph.thoughts]
+			created, _ = self._relink_thoughts(shard.graph, ids)
+			total += created
+			if created:
+				touched_shards.append((name, shard))
+
+		if total:
+			with self.mu:
+				self.save()
+				from .shard.store import save_all
+				for name, shard in touched_shards:
+					if name in self.registry.stores:
+						base = Path(self.registry.stores[name]["path"]).with_suffix("")
+						save_all(shard.graph, shard.model, shard.shard, base)
+			log.info("Think: +%d edges from %d touched thoughts", total, len(thought_ids))
 
 	def relink(self) -> dict:
 		"""Scan all thoughts and create missing edges between similar pairs.
@@ -1259,7 +1467,25 @@ class Handler:
 				log.exception("Store poll failed")
 
 	def _poll_stores(self):
-		"""Check registry for new stores and load them."""
+		"""Check registry for new stores and reload graph if written externally."""
+		# Detect external writes to graph.shard (e.g. MCP server on same file)
+		shard_file = Path(self.cfg.graph_path)
+		if shard_file.exists():
+			mtime = shard_file.stat().st_mtime
+			if mtime > self._graph_file_mtime + 1.0:  # +1s buffer for write to complete
+				log.info("graph.shard changed externally (mtime %s → %s), reloading", self._graph_file_mtime, mtime)
+				try:
+					base = shard_file.with_suffix("")
+					with self.mu:
+						self.graph, self.model, self.shard = load_all(self.cfg, base)
+					self._graph_file_mtime = mtime
+					# Reset diff state so frontend sees all reloaded thoughts as fresh
+					with self._last_poll_state_lock:
+						self._last_poll_state = {}
+					log.info("Reloaded graph: %d thoughts, %d edges", self.graph.num_thoughts, self.graph.num_edges)
+				except Exception:
+					log.exception("Failed to reload graph from disk")
+
 		current_stores = set(self.registry.stores.keys())
 		loaded_stores = set(self._shards.keys())
 

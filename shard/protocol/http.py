@@ -12,6 +12,9 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from ..handler import Handler
+from ..provider import TOOL_DEFINITIONS, QUERY_TOOL_NAMES
+
+_QUERY_TOOLS = [t for t in TOOL_DEFINITIONS if t["function"]["name"] in QUERY_TOOL_NAMES]
 
 
 class SessionStore:
@@ -58,9 +61,11 @@ def _build_system_prompt(handler: "Handler") -> str:
 		lines.append(f"Knowledge domains: {', '.join(descriptors.keys())}")
 	lines += [
 		"",
-		"Use your tools proactively — search memory before answering, ingest new information when asked.",
-		"Tools: ask (semantic search + answer), find_thoughts (raw nodes), ingest_sync (add knowledge),",
-		"       explore_thought / traverse (navigate graph), graph_stats / list_shards (inspect state).",
+		"Before answering any question, always query the knowledge graph to retrieve relevant information:",
+		"  - Use `ask` for a full semantic answer grounded in stored knowledge.",
+		"  - Use `find_thoughts` to locate specific nodes, then `explore_thought` or `traverse` to follow edges.",
+		"  - Use `list_shards` / `graph_stats` to orient yourself.",
+		"Ground your final answer in what the graph returns. Never ingest or modify the graph during chat.",
 	]
 	return "\n".join(lines)
 
@@ -378,7 +383,7 @@ def http(handler: Handler) -> FastAPI:
 			messages.append({"role": "system", "content": _build_system_prompt(handler)})
 		messages.append({"role": "user", "content": req.message})
 		tool_handler = ChatToolHandler(handler)
-		content, tool_calls = handler.provider.chat_with_tools(messages, tool_handler)
+		content, tool_calls = handler.provider.chat_with_tools(messages, tool_handler, tools=_QUERY_TOOLS)
 		messages.append({"role": "assistant", "content": content})
 		_sessions.set(session_id, messages)
 		return AgentResponse(content=content, session_id=session_id, tool_calls=tool_calls or None)

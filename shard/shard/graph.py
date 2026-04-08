@@ -162,6 +162,21 @@ class Graph:
 		self._emb_matrix = None  # invalidate cache
 		return t
 
+	def forget_thought(self, thought_id: int) -> bool:
+		"""Remove a thought and all edges connected to it. Returns True if found."""
+		if thought_id not in self.thoughts:
+			return False
+		del self.thoughts[thought_id]
+		self.edges = [e for e in self.edges if e.source_id != thought_id and e.target_id != thought_id]
+		self._emb_matrix = None
+		# Recompute profile from remaining thoughts
+		if self.thoughts:
+			embs = np.stack([t.embedding for t in self.thoughts.values()])
+			self._profile = embs.mean(axis=0).astype(np.float32)
+		else:
+			self._profile = None
+		return True
+
 	def add_edge(
 		self,
 		source_id: int,

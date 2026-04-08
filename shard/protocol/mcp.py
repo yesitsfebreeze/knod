@@ -92,6 +92,24 @@ def _mcp(handler: Handler, host: str = "127.0.0.1", port: int = 8766) -> FastMCP
 		result = handler.relink()
 		return json.dumps(result)
 
+	@mcp.tool()
+	def link(source_id: int, target_id: int, reasoning: str = "", confidence: float = 0.0, shard: str = "") -> str:
+		"""Link two thoughts. The LLM scores the relationship; confidence (0.0–1.0) is an inverse multiplier — at 0.0 the LLM weight is used as-is, at 1.0 the link is forced to maximum weight. Optionally supply your own reasoning text. Use shard= to target a specific shard."""
+		result = handler.link_thoughts(source_id, target_id, reasoning=reasoning, confidence=confidence, shard_name=shard or None)
+		return json.dumps(result)
+
+	@mcp.tool()
+	def forget(thought_id: int, shard: str = "") -> str:
+		"""Remove a thought and all its edges from the graph. Use shard= to target a specific shard, or leave empty for the global graph."""
+		result = handler.forget(thought_id, shard_name=shard or None)
+		return json.dumps(result)
+
+	@mcp.tool()
+	def rebootstrap_shards(only_empty: bool = True) -> str:
+		"""Re-run link reasoning and GNN training on loaded shards. Set only_empty=false to reprocess all shards, not just those with zero edges."""
+		result = handler.rebootstrap_shards(only_empty=only_empty)
+		return json.dumps(result)
+
 	# ---- Resources ----
 
 	@mcp.resource("shard://status")

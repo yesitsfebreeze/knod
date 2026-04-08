@@ -18,8 +18,10 @@ services:
       context: ..
       dockerfile: docker/Dockerfile
     container_name: shard-app
+    command: ["python3", "-m", "shard", "serve", "--mcp-transport", "streamable-http", "--mcp-port", "8766"]
     ports:
       - "7999:7999"
+      - "8766:8766"
     environment:
       - SHARD_HTTP_PORT=8080
       - SHARD_TCP_PORT=7999

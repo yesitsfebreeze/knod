@@ -53,7 +53,7 @@ def bootstrap_thoughts(
 		if t is None:
 			continue
 		pt = PreparedThought(text=t.text, embedding=t.embedding, source=t.source)
-		candidates = graph.find_thoughts(t.embedding, k=cfg.top_k, threshold=cfg.similarity_threshold)
+		candidates = graph.find_thoughts(t.embedding, k=cfg.top_k, threshold=0.0)
 		pt.candidate_ids = [c.id for c, _ in candidates if c.id != tid]
 		pt.candidate_texts = [c.text for c, _ in candidates if c.id != tid]
 		if pt.candidate_ids:

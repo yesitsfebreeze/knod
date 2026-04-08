@@ -12,16 +12,16 @@
 		rel="stylesheet">
 	<style>
 		:root {
-			--bg: #07090F;
+			--bg: #090909;
 			--glass: rgba(255, 255, 255, 0.04);
 			--glass-border: rgba(255, 255, 255, 0.08);
-			--glass-user: rgba(88, 140, 255, 0.09);
-			--glass-user-b: rgba(88, 140, 255, 0.18);
-			--accent: #588CFF;
-			--accent-dim: rgba(88, 140, 255, 0.28);
-			--text: #E4E6F0;
-			--text-muted: rgba(228, 230, 240, 0.4);
-			--text-faint: rgba(228, 230, 240, 0.18);
+			--glass-user: rgba(255, 255, 255, 0.06);
+			--glass-user-b: rgba(255, 255, 255, 0.11);
+			--accent: #B0B0B0;
+			--accent-dim: rgba(255, 255, 255, 0.14);
+			--text: #E8E8E8;
+			--text-muted: rgba(220, 220, 220, 0.4);
+			--text-faint: rgba(220, 220, 220, 0.18);
 			--blur: 20px;
 			--font-ui: 'Outfit', sans-serif;
 			--font-mono: 'JetBrains Mono', monospace;
@@ -243,6 +243,27 @@
 			color: rgba(255, 160, 160, 0.9);
 		}
 
+		/* ── Wordmark ────────────────────────────────────────────────────── */
+		#wordmark {
+			font-family: var(--font-ui);
+			font-size: 2.5rem;
+			font-weight: 300;
+			letter-spacing: 0.07em;
+			color: var(--text);
+			width: fit-content;
+			margin: 0 auto;
+			padding-bottom: 14px;
+			transition: transform 0.55s var(--ease), opacity 0.45s var(--ease);
+			transform-origin: center center;
+			pointer-events: none;
+			user-select: none;
+			will-change: transform;
+		}
+
+		#app.chat-active #wordmark {
+			display: none;
+		}
+
 		/* ── Input area ──────────────────────────────────────────────────── */
 		#input-area {
 			flex-shrink: 0;
@@ -318,7 +339,7 @@
 			pointer-events: none;
 		}
 
-		#send:hover::before { background: #7AABFF; }
+		#send:hover::before { background: #D0D0D0; }
 		#send:active::before { transform: scale(0.93); }
 
 		#send.loading::before,
@@ -423,6 +444,7 @@
 		<div id="messages"></div>
 
 		<div id="input-area">
+			<div id="wordmark">Xaber</div>
 			<div id="input-glass">
 				<textarea id="input" rows="1" placeholder="Ask anything…" autocomplete="off" spellcheck="false"></textarea>
 				<button id="send">
@@ -556,13 +578,16 @@
 				this.inputEl = document.getElementById('input');
 				this.sendEl = document.getElementById('send');
 				this.sessionNameEl = document.getElementById('session-name');
-				this.inputEl.addEventListener('input', () => this._resize());
+				this.wordmarkEl = document.getElementById('wordmark');
+				this._wordmarkDocked = false;
+				this.inputEl.addEventListener('input', () => { this._resize(); this._updateWordmark(); });
 				document.getElementById('session-new').addEventListener('click', () => {
 					State.setActive(State.createSession());
 					this.messagesEl.innerHTML = '';
 					this.appEl.classList.remove('chat-active');
 					App.started = false;
 					this.updateSessionDisplay(null);
+					this._undockWordmark();
 					this.inputEl.focus();
 				});
 				this.updateSessionDisplay(null);
@@ -599,6 +624,32 @@
 					this.inputEl.focus();
 					this._resize();
 				}
+			},
+			_updateWordmark() {
+				if (this.inputEl.value.length > 0 && !this._wordmarkDocked) {
+					this._dockWordmark();
+				} else if (this.inputEl.value.length === 0 && this._wordmarkDocked) {
+					this._undockWordmark();
+				}
+			},
+			_dockWordmark() {
+				const wR = this.wordmarkEl.getBoundingClientRect();
+				const gR = document.getElementById('input-glass').getBoundingClientRect();
+				const scale = 0.42;
+				const fromX = wR.left + wR.width / 2;
+				const fromY = wR.top + wR.height / 2;
+				const targetX = gR.left + 28;
+				const targetY = gR.top + gR.height / 2;
+				const tx = targetX - fromX;
+				const ty = targetY - fromY;
+				this.wordmarkEl.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
+				this.wordmarkEl.style.opacity = '0.55';
+				this._wordmarkDocked = true;
+			},
+			_undockWordmark() {
+				this.wordmarkEl.style.transform = '';
+				this.wordmarkEl.style.opacity = '';
+				this._wordmarkDocked = false;
 			},
 			getInput() { return this.inputEl.value.trim(); },
 			clearInput() { this.inputEl.value = ''; this.inputEl.style.height = 'auto'; },
@@ -734,15 +785,16 @@ fn hash(px: vec2<f32>, t: f32) -> f32 {
     let bpx  = blobs[i].pos * u.resolution;
     let brad = blobs[i].radius * max(u.resolution.x, u.resolution.y);
     let d    = length(px - bpx);
-    let t    = 1. - smoothstep(0., brad, d);
+    let fade = 180.;
+    let t    = 1. - smoothstep(max(0., brad - fade), brad, d);
     raw     += blobs[i].color.rgb * (t * t);
   }
   let col    = raw / (raw + vec3<f32>(1.));
-  let reveal = 1. - smoothstep(u.reveal_r * .70, u.reveal_r, length(px - u.mouse));
-  let bg     = vec3<f32>(0.02745, 0.03529, 0.05882);
+  let reveal = 1. - smoothstep(max(0., u.reveal_r - 140.), u.reveal_r, length(px - u.mouse));
+  let bg     = vec3<f32>(0.035, 0.035, 0.035);
   var result = min(bg + col * reveal, vec3<f32>(1.));
   let blob_mask = smoothstep(0.005, 0.05, length(raw));
-  let grain  = (hash(px, floor(u.time * 20.) / 20.) * 2. - 1.) * 0.045 * blob_mask * reveal;
+  let grain  = (hash(floor(px / 2.) * 2., floor(u.time * 20.) / 20.) * 2. - 1.) * 0.045 * blob_mask * reveal;
   return vec4<f32>(clamp(result + grain, vec3<f32>(0.), vec3<f32>(1.)), 1.0);
 }`;
 
@@ -790,7 +842,7 @@ fn hash(px: vec2<f32>, t: f32) -> f32 {
 				for (let i = 0; i < NUM_BLOBS; i++) {
 					const b = blobs[i];
 					const radius = Math.max(0.10, Math.min(0.30, b.baseRadius * (1 + 0.28 * Math.sin(tsS * 0.35 + b.phase))));
-					const [r, g, bl] = hslToRgb(b.hue, 0.78, 0.58);
+					const [r, g, bl] = hslToRgb(b.hue, 0.35, 0.32);
 					const o = i * 8;
 					blobData[o]=b.x; blobData[o+1]=b.y; blobData[o+2]=radius; blobData[o+3]=0;
 					blobData[o+4]=r; blobData[o+5]=g; blobData[o+6]=bl; blobData[o+7]=1;
@@ -801,7 +853,7 @@ fn hash(px: vec2<f32>, t: f32) -> f32 {
 				const enc  = device.createCommandEncoder();
 				const pass = enc.beginRenderPass({ colorAttachments: [{
 					view: ctx.getCurrentTexture().createView(),
-					clearValue: { r: 0.02745, g: 0.03529, b: 0.05882, a: 1 }, loadOp: 'clear', storeOp: 'store',
+					clearValue: { r: 0.035, g: 0.035, b: 0.035, a: 1 }, loadOp: 'clear', storeOp: 'store',
 				}]});
 				pass.setPipeline(pipeline); pass.setBindGroup(0, bg); pass.draw(3); pass.end();
 				device.queue.submit([enc.finish()]);
