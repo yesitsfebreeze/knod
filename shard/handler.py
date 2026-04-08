@@ -36,6 +36,20 @@ log = logging.getLogger(__name__)
 
 QUEUE_CAPACITY = 128
 
+# Common English function words excluded from keyword rescue matching.
+# Short proper nouns (names, identifiers) are NOT in this list intentionally.
+_QUERY_STOPWORDS = frozenset({
+    "the", "and", "for", "are", "but", "not", "you", "all", "can", "was",
+    "one", "our", "out", "get", "has", "him", "his", "how", "its", "may",
+    "new", "now", "see", "who", "did", "she", "too", "use", "had", "let",
+    "put", "say", "yet", "than", "that", "them", "then", "they", "this",
+    "been", "from", "have", "here", "were", "what", "when", "will", "with",
+    "your", "into", "more", "also", "some", "there", "their", "about",
+    "could", "would", "should", "which", "these", "those", "after", "does",
+    "tell", "give", "show", "know", "like", "just", "over", "make", "does",
+    "being", "doing", "where", "their", "while",
+})
+
 
 class Handler:
 	def __init__(self, cfg: Config):
@@ -70,6 +84,11 @@ class Handler:
 		if shard_file.exists():
 			log.info("Loading existing graph from %s", shard_file)
 			self.graph, self.model, self.shard = load_all(self.cfg, base)
+			# load_all already loaded the base model via warm_start.
+			# Only bootstrap if base.gnn was somehow missing.
+			if not Path(self.cfg.base_gnn_path).exists():
+				save_base_model(self.model, self.cfg)
+				log.info("Bootstrapped base model: %s", self.cfg.base_gnn_path)
 		else:
 			log.info("Creating new graph")
 			self.graph = Graph(
@@ -79,11 +98,10 @@ class Handler:
 			)
 			self.model = ShardMPNN(self.cfg)
 			self.shard = ShardLayer(self.cfg.hidden_dim)
-
-		# Bootstrap base model on first run if missing
-		if not load_base_model(self.model, self.cfg):
-			save_base_model(self.model, self.cfg)
-			log.info("Bootstrapped base model: %s", self.cfg.base_gnn_path or "~/.config/shard/base.gnn")
+			# Load base weights into fresh model, or save fresh weights as base on first run.
+			if not load_base_model(self.model, self.cfg):
+				save_base_model(self.model, self.cfg)
+				log.info("Bootstrapped base model: %s", self.cfg.base_gnn_path)
 
 		self.trainer = GNNTrainer(self.model, self.shard, self.cfg)
 		self.ingester = Ingester(self.graph, self.provider, self.cfg)
@@ -232,7 +250,10 @@ class Handler:
 				except Exception:
 					log.warning("Shard '%s' query failed", name, exc_info=True)
 
-		# Deduplicate across shards
+		# Global cosine pass — covers all thoughts regardless of profile routing
+		all_scored.append(self._global_cosine_scored(query_emb, query))
+
+		# Deduplicate across shards + global pass
 		scored = deduplicate(all_scored, self.cfg.top_k)
 		if not scored:
 			return "No relevant knowledge found.", []
@@ -998,15 +1019,21 @@ class Handler:
 		profile = shard.graph.profile.copy()
 		text = f"[shard:{name}] {shard.purpose}"
 
+		graph_path = self.registry.stores.get(name, {}).get("path", "<unknown>")
+		source = f"shard://{name}|{graph_path}"
+
 		existing_tid = self.graph._registry_nodes.get(name)
 		if existing_tid and existing_tid in self.graph.thoughts:
-			# Update embedding + text on existing registry node
+			log.info("Registry node update: '%s' from %s (thought #%d)", name, graph_path, existing_tid)
+			# Update embedding + text + source on existing registry node
 			self.graph.thoughts[existing_tid].embedding = profile
 			self.graph.thoughts[existing_tid].text = text
+			self.graph.thoughts[existing_tid].source = source
 			self.graph._update_profile(profile)
 		else:
+			log.info("Registry node create: '%s' from %s", name, graph_path)
 			# Create new registry node + edges to nearby global thoughts
-			t = self.graph.add_thought(text, profile, source=f"Shard:{name}")
+			t = self.graph.add_thought(text, profile, source=source)
 			if t is None:
 				return
 			self.graph._registry_nodes[name] = t.id
@@ -1029,10 +1056,6 @@ class Handler:
 			from .shard.store import read_shard_metadata as _read_meta
 			registered_paths = {Path(e["path"]).resolve() for e in self.registry.stores.values()}
 			skip = {Path(self.cfg.graph_path).resolve()}
-			if self.cfg.base_gnn_path:
-				skip.add(Path(self.cfg.base_gnn_path).resolve())
-			# Also skip base.shard — it's the PyTorch base model, not a graph shard
-			skip.add((shard_dir / "base.shard").resolve())
 			for shard_file in shard_dir.glob("*.shard"):
 				resolved = shard_file.resolve()
 				if resolved in skip:
@@ -1090,6 +1113,41 @@ class Handler:
 		# Upsert registry nodes so the global graph knows about all shards
 		for name, shard in self._shards.items():
 			self._upsert_shard_node(name, shard)
+
+	def _global_cosine_scored(self, query_emb, query: str = "") -> list[tuple]:
+		"""Low-floor cosine search across every graph, bypassing profile routing.
+
+		This pass exists specifically to rescue thoughts that profile routing
+		skipped or that scored below the adaptive merge threshold — including
+		proper nouns and short names where embedding similarity is weak.
+
+		Keyword rescue: any thought whose text literally contains a query term
+		(non-stopword, >2 chars) is guaranteed to clear the floor, regardless of
+		embedding score.
+		"""
+		floor = 0.15
+		k = self.cfg.top_k * 3
+		keywords = [
+			w.lower() for w in query.split()
+			if len(w) > 2 and w.lower() not in _QUERY_STOPWORDS
+		] if query else []
+
+		results: list[tuple] = []
+		# Search every graph — no profile routing applied here
+		for graph in [self.graph] + [s.graph for s in self._shards.values()]:
+			for t in graph.thoughts.values():
+				if t.source == "query_response" or t.source.startswith("Shard:") or t.source.startswith("shard://"):
+					continue
+				sim = cosine(query_emb, t.embedding)
+				if keywords:
+					text_lower = t.text.lower()
+					if any(kw in text_lower for kw in keywords):
+						sim = max(sim, floor + 0.01)
+				if sim >= floor:
+					results.append((t, sim))
+
+		results.sort(key=lambda x: x[1], reverse=True)
+		return results[:k]
 
 	def _score_shard(
 		self,

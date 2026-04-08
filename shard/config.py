@@ -58,7 +58,7 @@ class Config:
 	mcp_port: int = 8766
 
 	graph_path: str = ".shard/graph.shard"
-	base_gnn_path: str = ""
+	base_gnn_path: str = str(Path.home() / ".config" / "shard" / "base.gnn")
 
 	@classmethod
 	def load(cls, config_dir: Path | None = None) -> "Config":

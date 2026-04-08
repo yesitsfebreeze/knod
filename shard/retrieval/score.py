@@ -22,7 +22,7 @@ log = logging.getLogger(__name__)
 def cosine_scores(query_emb: np.ndarray, graph: Graph) -> dict[int, float]:
 	"""Q_S2: Cosine similarity between query and every thought embedding."""
 	scores = {}
-	for tid, t in graph.thoughts.items():
+	for tid, t in list(graph.thoughts.items()):
 		scores[tid] = cosine(query_emb, t.embedding)
 	return scores
 

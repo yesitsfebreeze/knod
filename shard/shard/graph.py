@@ -132,6 +132,8 @@ class Graph:
 		self.max_thoughts: int = max_thoughts  # 0 = unlimited
 		self.max_edges: int = max_edges  # 0 = unlimited
 		self.maturity_divisor: int = maturity_divisor
+		self._emb_matrix: np.ndarray | None = None  # normalized, shape (n, d)
+		self._emb_ordered: list["Thought"] = []     # parallel to _emb_matrix rows
 
 	@property
 	def num_thoughts(self) -> int:
@@ -157,6 +159,7 @@ class Graph:
 		t = Thought(id=tid, text=text, embedding=embedding, source=source)
 		self.thoughts[tid] = t
 		self._update_profile(embedding)
+		self._emb_matrix = None  # invalidate cache
 		return t
 
 	def add_edge(
@@ -179,16 +182,32 @@ class Graph:
 		self.edges.append(e)
 		return e
 
+	def _ensure_emb_matrix(self) -> tuple[np.ndarray, list["Thought"]]:
+		"""Build (or return cached) normalized embedding matrix for batch cosine search."""
+		if self._emb_matrix is not None:
+			return self._emb_matrix, self._emb_ordered
+		thoughts = list(self.thoughts.values())
+		mat = np.stack([t.embedding for t in thoughts])   # (n, d)
+		norms = np.linalg.norm(mat, axis=1, keepdims=True)
+		norms = np.where(norms > 1e-10, norms, 1.0)
+		self._emb_matrix = (mat / norms).astype(np.float32)
+		self._emb_ordered = thoughts
+		return self._emb_matrix, self._emb_ordered
+
 	def find_thoughts(self, embedding: np.ndarray, k: int = 5, threshold: float = 0.0) -> list[tuple[Thought, float]]:
 		if not self.thoughts:
 			return []
-		scored = []
-		for t in list(self.thoughts.values()):
-			sim = cosine(embedding, t.embedding)
-			if sim >= threshold:
-				scored.append((t, sim))
-		scored.sort(key=lambda x: x[1], reverse=True)
-		return scored[:k]
+		mat, ordered = self._ensure_emb_matrix()
+		q = embedding / (np.linalg.norm(embedding) + 1e-10)
+		sims = mat @ q.astype(np.float32)               # one BLAS matmul
+		if threshold > 0.0:
+			indices = np.where(sims >= threshold)[0]
+		else:
+			indices = np.arange(len(ordered))
+		if len(indices) == 0:
+			return []
+		top = indices[np.argsort(sims[indices])[::-1][:k]]
+		return [(ordered[i], float(sims[i])) for i in top]
 
 	def find_edges(self, embedding: np.ndarray, k: int = 5, threshold: float = 0.0) -> list[tuple[Edge, float]]:
 		if not self.edges:
