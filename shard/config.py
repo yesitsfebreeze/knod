@@ -8,27 +8,13 @@ from pathlib import Path
 
 @dataclass
 class Config:
-	# Voyage tier (embeddings)
-	voyage_enabled: bool = False
-	voyage_api_key: str = ""
-	voyage_base_url: str = ""
-	voyage_model: str = "voyage-4"
-
-	# Anthropic tier (Claude chat)
-	anthropic_enabled: bool = False
-	anthropic_api_key: str = ""
-	anthropic_base_url: str = ""
-	anthropic_model: str = "claude-sonnet-4-20250514"
-
 	# OpenAI tier (OpenAI-compatible API)
-	openai_enabled: bool = False
 	openai_api_key: str = ""
 	openai_base_url: str = "https://api.openai.com/v1"
 	openai_model: str = "gpt-4o-mini"
 	openai_embedding_model: str = "text-embedding-3-small"
 
 	# Local tier (Ollama or other local APIs)
-	local_enabled: bool = False
 	local_api_key: str = "ollama"
 	local_base_url: str = ""
 	local_model: str = ""

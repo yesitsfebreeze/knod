@@ -1,9 +1,6 @@
 import json
 import logging
 import numpy as np
-from anthropic import Anthropic
-import voyageai
-from voyageai.error import AuthenticationError as VoyageAuthError, RateLimitError as VoyageRateLimitError
 from openai import OpenAI, APIStatusError, APITimeoutError, APIConnectionError, RateLimitError, AuthenticationError
 
 from .config import Config
@@ -187,23 +184,8 @@ TOOL_DEFINITIONS = [
 class Provider:
 	def __init__(self, cfg: Config):
 		self._cfg = cfg
-		self._use_voyage = bool(cfg.voyage_api_key) and cfg.voyage_enabled
-		self._use_anthropic = bool(cfg.anthropic_api_key) and cfg.anthropic_enabled
-		self._use_openai = bool(cfg.openai_api_key) and cfg.openai_enabled
-		self._use_local = bool(cfg.local_base_url) and cfg.local_enabled
-
-		if self._use_voyage:
-			self._voyage = voyageai.Client(api_key=cfg.voyage_api_key)
-		else:
-			self._voyage = None
-
-		if self._use_anthropic:
-			self._anthropic = Anthropic(
-				api_key=cfg.anthropic_api_key,
-				**({"base_url": cfg.anthropic_base_url} if cfg.anthropic_base_url else {}),
-			)
-		else:
-			self._anthropic = None
+		self._use_openai = bool(cfg.openai_api_key)
+		self._use_local = bool(cfg.local_base_url)
 
 		if self._use_openai:
 			self._openai = OpenAI(api_key=cfg.openai_api_key, base_url=cfg.openai_base_url)
@@ -221,76 +203,31 @@ class Provider:
 		self._embed_provider: str | None = None  # None = not yet probed
 
 	def _chat(self, **kwargs) -> "openai.types.chat.ChatCompletion":
-		if self._use_anthropic:
-			try:
-				return self._anthropic_chat(**{**kwargs, "model": self._cfg.anthropic_model})
-			except _FALLBACK_ERRORS as exc:
-				log.warning("Anthropic failed (%s), trying OpenAI", exc)
-
 		if self._use_openai:
 			try:
-				return self._openai_chat(**kwargs)
+				return self._openai.chat.completions.create(**kwargs)
 			except _FALLBACK_ERRORS as exc:
 				log.warning("OpenAI failed (%s), trying local", exc)
 
 		if self._local is not None:
-			return self._local_chat(**kwargs)
+			messages = kwargs.pop("messages", [])
+			kwargs["model"] = self._cfg.local_model or self.chat_model
+			return self._local.chat.completions.create(messages=messages, **kwargs)
 
-		raise RuntimeError("No providers available: configure anthropic_api_key, openai_api_key, or local_base_url")
-
-	def _openai_chat(self, **kwargs) -> "openai.types.chat.ChatCompletion":
-		return self._openai.chat.completions.create(**kwargs)
-
-	def _local_chat(self, **kwargs) -> "openai.types.chat.ChatCompletion":
-		messages = kwargs.pop("messages", [])
-		kwargs["model"] = self._cfg.local_model or self.chat_model
-		return self._local.chat.completions.create(messages=messages, **kwargs)
-
-	def _anthropic_chat(self, **kwargs) -> "openai.types.chat.ChatCompletion":
-		messages = kwargs.pop("messages", [])
-		model = kwargs.pop("model", self.chat_model)
-		system = ""
-		user_messages = []
-
-		for msg in messages:
-			if msg.get("role") == "system":
-				system = msg.get("content", "")
-			else:
-				user_messages.append(msg)
-
-		anthropic_messages = [{"role": m["role"], "content": m["content"]} for m in user_messages]
-
-		# Anthropic doesn't support response_format - remove it
-		kwargs.pop("response_format", None)
-
-		resp = self._anthropic.messages.create(
-			model=model,
-			max_tokens=4096,
-			system=system,
-			messages=anthropic_messages,
-			**kwargs,
-		)
-		content = resp.content[0].text if resp.content else ""
-		return OpenAIMessage(content=content, model=model)
+		raise RuntimeError("No providers available: configure openai_api_key or local_base_url")
 
 	def _probe_embed(self) -> None:
 		"""Status-check each embedding tier in order; cache the first working one."""
 		probe = "probe"
-		if self._voyage is not None:
-			try:
-				self._voyage.embed([probe], model=self._cfg.voyage_model)
-				self._embed_provider = "voyage"
-				log.info("Embedding provider: voyage (%s)", self._cfg.voyage_model)
-				return
-			except VoyageRateLimitError as e:
-				log.warning("Voyage rate limited: %s", e)
-			except VoyageAuthError as e:
-				log.warning("Voyage auth error: %s", e)
-				self._voyage = None
-			except Exception as e:
-				log.warning("Voyage embedding unavailable (%s), trying next provider", e)
-				self._voyage = None
-
+		log.info(
+			"Probing embed — openai: use=%s key=%s model=%s | local: use=%s url=%s model=%s",
+			self._use_openai,
+			(self._cfg.openai_api_key[:12] + "...") if self._cfg.openai_api_key else "UNSET",
+			self._cfg.openai_embedding_model or "UNSET",
+			self._use_local,
+			self._cfg.local_base_url or "UNSET",
+			self._cfg.local_embedding_model or self._cfg.local_model or "UNSET",
+		)
 		if self._openai is not None:
 			try:
 				self._openai.embeddings.create(model=self._cfg.openai_embedding_model, input=probe)
@@ -298,7 +235,7 @@ class Provider:
 				log.info("Embedding provider: openai (%s)", self._cfg.openai_embedding_model)
 				return
 			except Exception as e:
-				log.warning("OpenAI embedding unavailable (%s), trying next provider", e)
+				log.warning("OpenAI embedding unavailable (%s), trying local", e)
 				self._openai = None
 
 		if self._local is not None and self._use_local:
@@ -311,19 +248,20 @@ class Provider:
 					return
 				except Exception as e:
 					log.warning("Local embedding unavailable (%s)", e)
+			else:
+				log.warning("Local embedding skipped — no local_embedding_model or local_model set")
+		else:
+			log.warning("Local embedding skipped — _local=%s _use_local=%s", self._local, self._use_local)
 
 		self._embed_provider = ""
 		raise RuntimeError(
-			"No embedding provider available — configure voyage_api_key, "
-			"openai_api_key+openai_embedding_model, or local_base_url+local_embedding_model"
+			"No embedding provider available — configure openai_api_key+openai_embedding_model "
+			"or local_base_url+local_embedding_model"
 		)
 
 	def embed_text(self, text: str) -> np.ndarray:
 		if self._embed_provider is None:
 			self._probe_embed()
-		if self._embed_provider == "voyage":
-			result = self._voyage.embed([text], model=self._cfg.voyage_model)
-			return np.array(result.embeddings[0], dtype=np.float32)
 		if self._embed_provider == "openai":
 			resp = self._openai.embeddings.create(model=self._cfg.openai_embedding_model, input=text)
 			return np.array(resp.data[0].embedding, dtype=np.float32)
@@ -338,9 +276,6 @@ class Provider:
 			return []
 		if self._embed_provider is None:
 			self._probe_embed()
-		if self._embed_provider == "voyage":
-			result = self._voyage.embed(texts, model=self._cfg.voyage_model)
-			return [np.array(e, dtype=np.float32) for e in result.embeddings]
 		if self._embed_provider == "openai":
 			resp = self._openai.embeddings.create(model=self._cfg.openai_embedding_model, input=texts)
 			return [np.array(d.embedding, dtype=np.float32) for d in sorted(resp.data, key=lambda d: d.index)]
@@ -464,12 +399,9 @@ class Provider:
 
 	def chat(self, messages: list[dict], **kwargs) -> str:
 		resp = self._chat(model=self.chat_model, messages=messages, **kwargs)
-		if self._use_anthropic:
-			return resp.content
 		return resp.choices[0].message.content
 
 	def chat_with_tools(self, messages: list[dict], tool_handler, **kwargs) -> tuple[str, list[dict]]:
-		"""Chat with tool calling support. tool_handler should have methods matching tool names."""
 		tool_calls = []
 		max_turns = 10
 		turn = 0
@@ -483,54 +415,36 @@ class Provider:
 				**kwargs,
 			)
 
-			if self._use_anthropic:
-				# Check for tool use in response
-				content = resp.content
-				tool_use = getattr(resp, "tool_use", None)
-				if tool_use:
-					# Anthropic returns tool_use blocks
-					for tool in tool_use:
-						tool_name = tool.name
-						tool_input = tool.input
-						try:
-							result = self._call_tool(tool_name, tool_input, tool_handler)
-							messages.append({"role": "user", "content": json.dumps(result)})
-						except Exception as e:
-							messages.append({"role": "user", "content": f"Error: {str(e)}"})
-					continue
-				# No tool use, return the content
-				return content, tool_calls
-			else:
-				# OpenAI style
-				choices = resp.choices
-				if not choices:
-					return "", tool_calls
-				msg = choices[0].message
-				if not hasattr(msg, "tool_calls") or not msg.tool_calls:
-					return msg.content, tool_calls
+			# Unified OpenAI-style path (_anthropic_chat wraps Anthropic responses in OpenAIMessage)
+			choices = resp.choices
+			if not choices:
+				return "", tool_calls
+			msg = choices[0].message
+			if not hasattr(msg, "tool_calls") or not msg.tool_calls:
+				return msg.content, tool_calls
 
-				# Process tool calls
-				for tc in msg.tool_calls:
-					tool_name = tc.function.name
-					tool_args = json.loads(tc.function.arguments)
-					try:
-						result = self._call_tool(tool_name, tool_args, tool_handler)
-						tool_calls.append({"name": tool_name, "result": result})
-						messages.append(
-							{
-								"role": "tool",
-								"tool_call_id": tc.id,
-								"content": json.dumps(result),
-							}
-						)
-					except Exception as e:
-						messages.append(
-							{
-								"role": "tool",
-								"tool_call_id": tc.id,
-								"content": f"Error: {str(e)}",
-							}
-						)
+			# Process tool calls
+			for tc in msg.tool_calls:
+				tool_name = tc.function.name
+				tool_args = json.loads(tc.function.arguments)
+				try:
+					result = self._call_tool(tool_name, tool_args, tool_handler)
+					tool_calls.append({"name": tool_name, "result": result})
+					messages.append(
+						{
+							"role": "tool",
+							"tool_call_id": tc.id,
+							"content": json.dumps(result),
+						}
+					)
+				except Exception as e:
+					messages.append(
+						{
+							"role": "tool",
+							"tool_call_id": tc.id,
+							"content": f"Error: {str(e)}",
+						}
+					)
 
 		return "Max tool turns exceeded", tool_calls
 
@@ -544,20 +458,3 @@ class Provider:
 		return result
 
 
-class OpenAIMessage:
-	class _Choice:
-		class _Message:
-			def __init__(self, content: str, model: str):
-				self.content = content
-				self.model = model
-
-		def __init__(self, content: str, model: str):
-			self.message = self._Message(content, model)
-
-		def __getitem__(self, key):
-			if key == "message":
-				return self.message
-			raise KeyError(key)
-
-	def __init__(self, content: str, model: str):
-		self.choices = [self._Choice(content, model)]
