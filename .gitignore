@@ -16,3 +16,4 @@ __pycache__/
 .shard/
 .vscode/
 .pytest_cache/
+config/
