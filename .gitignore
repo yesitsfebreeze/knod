@@ -2,6 +2,7 @@ bin/
 build/
 corpus/
 archive/
+docs/
 
 *.exe
 *.txt
@@ -12,4 +13,6 @@ archive/
 __pycache__/
 .ruff_cache/
 .timmy/
-.knod/
+.shard/
+.vscode/
+.pytest_cache/

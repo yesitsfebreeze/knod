@@ -13,9 +13,9 @@ Tests cover:
 import numpy as np
 import pytest
 
-from knod.config import Config
-from knod.strand.graph import Graph
-from knod.retrieval.expand import expand
+from shard.config import Config
+from shard.strand.graph import Graph
+from shard.retrieval.expand import expand
 
 
 # ---------------------------------------------------------------------------

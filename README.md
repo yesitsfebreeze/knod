@@ -1,4 +1,4 @@
-# knod
+# shard
 
 A knowledge graph system that ingests raw text, distills it into atomic thoughts, and organizes them in a relevance graph that a GNN learns to navigate. An external LLM handles reasoning — decomposing text, evaluating worth, linking thoughts, and generating answers. A local GNN handles fast graph traversal and retrieval scoring.
 
@@ -44,7 +44,7 @@ When a question is asked:
 
 ### Multi-Store Queries
 
-`knod ask` spawns subprocesses — one per registered strand graph. Each subprocess loads its graph, runs cosine similarity search, and returns scored results via stdout. The parent process merges, deduplicates, ranks, and calls the LLM for the final answer.
+`shard ask` spawns subprocesses — one per registered strand graph. Each subprocess loads its graph, runs cosine similarity search, and returns scored results via stdout. The parent process merges, deduplicates, ranks, and calls the LLM for the final answer.
 
 ### Limbo & Strand Promotion
 
@@ -59,10 +59,10 @@ Thoughts rejected by the MCMC gate are stored in a limbo graph. A background sca
 | `provider/` | External LLM interface — OpenAI implementation with embedding, chat, decomposition, evaluation, linking, answer generation |
 | `ingest/` | Ingestion pipeline — decompose, embed, link, MCMC gate, limbo routing, cluster scanning |
 | `protocol/` | Request handling — TCP (prefix-based commands) and HTTP (REST API, background thread) |
-| `registry/` | Strand store management — INI-format store/knid registry at `~/.config/knod/stores` |
-| `config/` | Configuration — INI parsing from `~/.config/knod/config`, defaults for all parameters |
+| `registry/` | Strand store management — INI-format store/knid registry at `~/.config/shard/stores` |
+| `config/` | Configuration — INI parsing from `~/.config/shard/config`, defaults for all parameters |
 | `cli/` | CLI subcommands — `new`, `register`, `list`, `knid`, `ask` |
-| `logger/` | Multi-channel file logging — knod.log, performance.log, error.log with rotation |
+| `logger/` | Multi-channel file logging — shard.log, performance.log, error.log with rotation |
 | `repl/` | Interactive REPL — non-blocking stdin polling with command dispatch |
 | `http/` | Bundled HTTP server library — routing, request parsing, response building |
 | `util/` | Minimal helpers |
@@ -72,7 +72,7 @@ Thoughts rejected by the MCMC gate are stored in a limbo graph. A background sca
 ### Build & Run
 
 ```sh
-just build          # optimized build → bin/knod.exe
+just build          # optimized build → bin/shard.exe
 just run            # build + run
 just debug          # debug build
 just test           # run all unit tests
@@ -80,7 +80,7 @@ just test           # run all unit tests
 
 ### Configuration
 
-Config lives at `~/.config/knod/config` (INI format, created on first run):
+Config lives at `~/.config/shard/config` (INI format, created on first run):
 
 ```ini
 api_key = sk-...
@@ -88,7 +88,7 @@ embedding_model = text-embedding-3-small
 chat_model = gpt-4o-mini
 tcp_port = 7999
 http_port = 8080
-graph_path = knod.graph
+graph_path = shard.graph
 max_thoughts = 10000
 similarity_threshold = 0.7
 ```
@@ -96,14 +96,14 @@ similarity_threshold = 0.7
 ### CLI
 
 ```sh
-knod                        # start main process (TCP + HTTP + REPL)
-knod new                    # create a new strand store
-knod register <path>        # register an existing graph file
-knod list                   # list all stores
-knod list --knid=<name>     # list stores in a knowledge cluster
-knod knid ...               # manage knowledge clusters
-knod ask <query>            # query across all stores (subprocess per store)
-knod ask --knid=<name> <q>  # query within a specific cluster
+shard                        # start main process (TCP + HTTP + REPL)
+shard new                    # create a new strand store
+shard register <path>        # register an existing graph file
+shard list                   # list all stores
+shard list --knid=<name>     # list stores in a knowledge cluster
+shard knid ...               # manage knowledge clusters
+shard ask <query>            # query across all stores (subprocess per store)
+shard ask --knid=<name> <q>  # query within a specific cluster
 ```
 
 ### TCP Commands
@@ -138,13 +138,13 @@ GET    /health                  health check
 ### Justfile Commands
 
 ```sh
-just ingest         # start knod in background
+just ingest         # start shard in background
 just send "text"    # send text to running node
 just send-file f    # send file contents to running node
 just ask "query"    # ask a question
-just stop           # stop running knod
-just status         # check if knod is running
-just log            # view knod log
+just stop           # stop running shard
+just status         # check if shard is running
+just log            # view shard log
 just clean          # remove build artifacts
 ```
 

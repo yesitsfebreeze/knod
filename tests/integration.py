@@ -1,4 +1,4 @@
-"""Full-loop integration test for knod.
+"""Full-loop integration test for shard.
 
 Exercises the complete pipeline via Handler:
   1. Ingest AI-domain articles (embedding API calls)
@@ -9,7 +9,7 @@ Exercises the complete pipeline via Handler:
   6. Verify access tracking (feedback loop)
   7. Verify persistence (save, reload, ask again)
 
-Requires a valid OpenAI API key in ~/.config/knod/config or OPENAI_API_KEY env var.
+Requires a valid OpenAI API key in ~/.config/shard/config or OPENAI_API_KEY env var.
 
 Usage:
   python tests/integration.py [--fresh]
@@ -27,13 +27,13 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(messag
 logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger("integration")
 
-from knod.config import Config
-from knod.strand.graph import Graph
-from knod.strand.gnn import KnodMPNN, StrandLayer
-from knod.strand.trainer import GNNTrainer
-from knod.strand.store import save_knod, load_knod
-from knod.ingest import Ingester
-from knod.handler import Handler
+from shard.config import Config
+from shard.strand.graph import Graph
+from shard.strand.gnn import ShardMPNN, StrandLayer
+from shard.strand.trainer import GNNTrainer
+from shard.strand.store import save_shard, load_shard
+from shard.ingest import Ingester
+from shard.handler import Handler
 
 # ---------------------------------------------------------------------------
 # Test harness
@@ -156,7 +156,7 @@ def setup_handler(cfg: Config, graph_path: str, fresh: bool) -> Handler:
 
 	if not fresh and os.path.exists(graph_path):
 		print("\n=== Loading Persisted Graph ===")
-		handler.graph, handler.model, handler.strand = load_knod(cfg, graph_path)
+		handler.graph, handler.model, handler.strand = load_shard(cfg, graph_path)
 		handler.trainer = GNNTrainer(handler.model, handler.strand, cfg)
 		handler.ingester = Ingester(handler.graph, handler.provider, cfg)
 		g = handler.graph
@@ -168,7 +168,7 @@ def setup_handler(cfg: Config, graph_path: str, fresh: bool) -> Handler:
 			max_edges=cfg.max_edges,
 			maturity_divisor=cfg.maturity_divisor,
 		)
-		handler.model = KnodMPNN(cfg)
+		handler.model = ShardMPNN(cfg)
 		handler.strand = StrandLayer(cfg.hidden_dim)
 		handler.trainer = GNNTrainer(handler.model, handler.strand, cfg)
 		handler.ingester = Ingester(handler.graph, handler.provider, cfg)
@@ -265,11 +265,11 @@ def test_persistence(handler: Handler, cfg: Config, graph_path: str) -> None:
 	print("\n=== Persistence ===")
 
 	# Save
-	save_knod(handler.graph, handler.model, handler.strand, graph_path)
-	check("save_knod succeeded", os.path.exists(graph_path))
+	save_shard(handler.graph, handler.model, handler.strand, graph_path)
+	check("save_shard succeeded", os.path.exists(graph_path))
 
 	# Reload
-	g2, m2, s2 = load_knod(cfg, graph_path)
+	g2, m2, s2 = load_shard(cfg, graph_path)
 	check(f"thoughts preserved ({g2.num_thoughts})", g2.num_thoughts == handler.graph.num_thoughts)
 	check(f"edges preserved ({g2.num_edges})", g2.num_edges == handler.graph.num_edges)
 	check(f"limbo preserved ({len(g2.limbo)})", len(g2.limbo) == len(handler.graph.limbo))
@@ -314,11 +314,11 @@ def main():
 
 	cfg = Config.load()
 	if not cfg.api_key:
-		print("ERROR: no API key found. Set OPENAI_API_KEY or add api_key to ~/.config/knod/config")
+		print("ERROR: no API key found. Set OPENAI_API_KEY or add api_key to ~/.config/shard/config")
 		sys.exit(1)
 
-	with tempfile.TemporaryDirectory(prefix="knod_integ_") as tmpdir:
-		graph_path = os.path.join(tmpdir, "integration.knod")
+	with tempfile.TemporaryDirectory(prefix="shard_integ_") as tmpdir:
+		graph_path = os.path.join(tmpdir, "integration.shard")
 
 		handler = setup_handler(cfg, graph_path, fresh=True)
 

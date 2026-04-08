@@ -1,10 +1,10 @@
-"""Ingest deep research on AI improvement methods and content storage into knod."""
+"""Ingest deep research on AI improvement methods and content storage into shard."""
 
 import time
 import sys
 
-from knod.config import Config
-from knod.handler import Handler
+from shard.config import Config
+from shard.handler import Handler
 
 RESEARCH_ARTICLES = {
 	"continual_learning": (

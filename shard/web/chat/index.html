@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>shard — chat</title>
+	<link rel="preconnect" href="https://fonts.googleapis.com">
+	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+	<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+	<link rel="stylesheet" href="/static/style.css">
+	<style>
+		body { margin: 0; background: #0d0d0d; color: #e0e0e0; font-family: 'IBM Plex Mono', monospace; }
+		#app { display: flex; flex-direction: column; height: 100vh; max-width: 800px; margin: 0 auto; padding: 20px; box-sizing: border-box; }
+		header { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid #333; margin-bottom: 20px; }
+		header h1 { font-size: 1.2rem; font-weight: 500; margin: 0; color: #fff; }
+		#messages { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; padding: 10px 0; }
+		.message { padding: 12px 16px; border-radius: 8px; max-width: 85%; word-wrap: break-word; }
+		.message.user { align-self: flex-end; background: #1a4d2e; }
+		.message.assistant { align-self: flex-start; background: #1a1a1a; border: 1px solid #333; }
+		.message .role { font-size: 0.75rem; color: #888; margin-bottom: 4px; }
+		.message .content { line-height: 1.5; }
+		#input-area { display: flex; gap: 10px; padding-top: 16px; border-top: 1px solid #333; }
+		#input { flex: 1; padding: 12px 16px; border-radius: 8px; border: 1px solid #333; background: #0d0d0d; color: #e0e0e0; font-family: inherit; font-size: 14px; resize: none; }
+		#input:focus { outline: none; border-color: #4a9; }
+		#send { padding: 12px 24px; border-radius: 8px; border: none; background: #1a4d2e; color: #fff; font-family: inherit; font-weight: 500; cursor: pointer; }
+		#send:hover { background: #256839; }
+		#send:disabled { background: #333; cursor: not-allowed; }
+		.loading { color: #888; font-style: italic; }
+	</style>
+</head>
+<body>
+	<div id="app">
+		<header>
+			<h1>shard chat</h1>
+		</header>
+		<div id="messages"></div>
+		<div id="input-area">
+			<textarea id="input" rows="1" placeholder="Ask something..."></textarea>
+			<button id="send">send</button>
+		</div>
+	</div>
+	<script>
+		const messages = document.getElementById('messages');
+		const input = document.getElementById('input');
+		const sendBtn = document.getElementById('send');
+
+		function addMessage(role, content) {
+			const div = document.createElement('div');
+			div.className = `message ${role}`;
+			div.innerHTML = `<div class="role">${role}</div><div class="content">${content}</div>`;
+			messages.appendChild(div);
+			messages.scrollTop = messages.scrollHeight;
+		}
+
+		async function send() {
+			const text = input.value.trim();
+			if (!text) return;
+			input.value = '';
+			addMessage('user', text);
+			const loading = document.createElement('div');
+			loading.className = 'message assistant loading';
+			loading.textContent = 'thinking...';
+			messages.appendChild(loading);
+			sendBtn.disabled = true;
+			try {
+				const res = await fetch('/chat', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ messages: [{ role: 'user', content: text }] })
+				});
+				const data = await res.json();
+				loading.remove();
+				addMessage('assistant', data.content || 'No response');
+			} catch (e) {
+				loading.remove();
+				addMessage('assistant', 'Error: ' + e.message);
+			}
+			sendBtn.disabled = false;
+		}
+
+		sendBtn.addEventListener('click', send);
+		input.addEventListener('keydown', e => {
+			if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+		});
+		input.focus();
+	</script>
+</body>
+</html>

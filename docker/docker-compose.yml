@@ -1,0 +1,35 @@
+services:
+  shard-proxy:
+    image: nginx:alpine
+    container_name: shard-proxy
+    ports:
+      - "80:80"
+      - "443:443"
+      - "7777:7777"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./certs:/etc/nginx/certs:ro
+    depends_on:
+      - shard-app
+    restart: unless-stopped
+
+  shard-app:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: shard-app
+    ports:
+      - "7999:7999"
+    environment:
+      - SHARD_HTTP_PORT=8080
+      - SHARD_TCP_PORT=7999
+    volumes:
+      - ../config:/config:ro
+      - ../shard/web:/app/shard/web:rw
+      - shard-data:/root/.config/shard
+      - shard-graph:/root/.shard
+    restart: unless-stopped
+
+volumes:
+  shard-data:
+  shard-graph:
