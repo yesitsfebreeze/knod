@@ -6,6 +6,7 @@ docs/
 
 *.exe
 *.txt
+!requirements.txt
 *.graph
 *.pt
 *.pdb
