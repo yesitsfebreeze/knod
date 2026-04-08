@@ -12,8 +12,8 @@ import numpy as np
 import torch
 
 from ..config import Config
-from ..Shard.graph import Graph
-from ..Shard.gnn import ShardMPNN, ShardLayer
+from ..shard.graph import Graph
+from ..shard.gnn import ShardMPNN, ShardLayer
 from ..util.math import cosine
 
 log = logging.getLogger(__name__)
@@ -42,14 +42,14 @@ def gnn_scores(
 	query_emb: np.ndarray,
 	graph: Graph,
 	model: ShardMPNN,
-	Shard: ShardLayer,
+	shard: ShardLayer,
 ) -> dict[int, float]:
 	"""Q_S1: GNN forward pass relevance scores (base MPNN + ShardLayer)."""
 	if graph.num_edges == 0:
 		return {}
 
 	model.eval()
-	Shard.eval()
+	shard.eval()
 
 	node_features, edge_index, edge_features, ordered_ids, valid_edges = graph.to_tensors()
 
@@ -67,7 +67,7 @@ def gnn_scores(
 	try:
 		with torch.no_grad():
 			hidden, scores_t = model(node_features, edge_index, edge_features)
-			hidden, scores_t = Shard(hidden, edge_index)
+			hidden, scores_t = shard(hidden, edge_index)
 	except Exception:
 		log.debug("GNN scoring failed, falling back to cosine only", exc_info=True)
 		return {}

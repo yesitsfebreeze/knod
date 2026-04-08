@@ -48,7 +48,7 @@ When a question is asked:
 
 ### Limbo & Shard Promotion
 
-Thoughts rejected by the MCMC gate are stored in a limbo graph. A background scan (every 60s) checks for clusters that exceed `limbo_cluster_min`. When a cluster is large enough, the external LLM suggests a name and purpose, and the cluster can be promoted to a new Shard store.
+Thoughts rejected by the MCMC gate are stored in a limbo graph. A background scan (every 60s) checks for clusters that exceed `limbo_cluster_min`. When a cluster is large enough, the external LLM suggests a name and purpose, and the cluster can be promoted to a new shard.
 
 ## Modules
 
@@ -165,5 +165,5 @@ All embeddings stored as `[1536]f32`. Strings as length-prefixed byte arrays.
 - **Thoughts are atomic.** One idea per node. Small nodes enable precise retrieval.
 - **Hybrid by design.** Local GNN for fast navigation, external LLM for reasoning. Neither is optional.
 - **MCMC drives specialization.** Acceptance gating — not pruning — shapes what a graph keeps.
-- **One executable, many Shards.** Single binary, one store per graph file, subprocess-based fan-out for queries.
+- **One executable, many shards.** Single binary, one store per graph file, subprocess-based fan-out for queries.
 - **Simple persistence.** Binary files, no database.

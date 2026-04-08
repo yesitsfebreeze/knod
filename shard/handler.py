@@ -1,4 +1,4 @@
-"""Handler — owns all Shards; orchestrates ingest, limbo, and retrieval."""
+"""Handler — owns all shards; orchestrates ingest, limbo, and retrieval."""
 
 import logging
 import threading
@@ -10,11 +10,11 @@ import numpy as np
 from .config import Config
 from .provider import Provider
 from .registry import Registry, store_path
-from .Shard.graph import Graph, Thought
-from .Shard.gnn import ShardMPNN, ShardLayer
-from .Shard.trainer import GNNTrainer
-from .Shard.types import GraphEvent, EventListener, ShardIndexEntry, Shard, IngestResult
-from .Shard.store import save_all, load_all, load_base_model, read_shard_metadata, save_base_model
+from .shard.graph import Graph, Thought
+from .shard.gnn import ShardMPNN, ShardLayer
+from .shard.trainer import GNNTrainer
+from .shard.types import GraphEvent, EventListener, ShardIndexEntry, Shard, IngestResult
+from .shard.store import save_all, load_all, load_base_model, read_shard_metadata, save_base_model
 from .util.math import cosine
 from .ingest import Ingester
 from .limbo import find_clusters, promote_cluster
@@ -44,11 +44,11 @@ class Handler:
 		self.registry = Registry()
 		self.graph: Graph | None = None
 		self.model: ShardMPNN | None = None
-		self.Shard: ShardLayer | None = None
+		self.shard: ShardLayer | None = None
 		self.trainer: GNNTrainer | None = None
 		self.ingester: Ingester | None = None
-		self._Shards: dict[str, Shard] = {}
-		self._index: dict[str, ShardIndexEntry] = {}  # Shard name → index entry
+		self._shards: dict[str, Shard] = {}
+		self._index: dict[str, ShardIndexEntry] = {}  # shard name → index entry
 		self.mu = threading.Lock()
 		self._queue: Queue | None = None
 		self._queue_worker: threading.Thread | None = None
@@ -61,7 +61,7 @@ class Handler:
 		self._retrieval_count: int = 0
 		self._last_poll_state: dict = {}
 		self._last_poll_state_lock = threading.Lock()
-		self._last_Shard_state: dict[str, tuple[int, int]] = {}  # name -> (thoughts, edges)
+		self._last_shard_state: dict[str, tuple[int, int]] = {}  # name -> (thoughts, edges)
 
 	def init(self):
 		base = Path(self.cfg.graph_path).with_suffix("")
@@ -69,7 +69,7 @@ class Handler:
 
 		if shard_file.exists():
 			log.info("Loading existing graph from %s", shard_file)
-			self.graph, self.model, self.Shard = load_all(self.cfg, base)
+			self.graph, self.model, self.shard = load_all(self.cfg, base)
 		else:
 			log.info("Creating new graph")
 			self.graph = Graph(
@@ -78,13 +78,13 @@ class Handler:
 				maturity_divisor=self.cfg.maturity_divisor,
 			)
 			self.model = ShardMPNN(self.cfg)
-			self.Shard = ShardLayer(self.cfg.hidden_dim)
+			self.shard = ShardLayer(self.cfg.hidden_dim)
 
-		self.trainer = GNNTrainer(self.model, self.Shard, self.cfg)
+		self.trainer = GNNTrainer(self.model, self.shard, self.cfg)
 		self.ingester = Ingester(self.graph, self.provider, self.cfg)
 
-		# Load registered Shards
-		self._load_Shards()
+		# Load registered shards
+		self._load_shards()
 
 		# Start async ingest queue
 		self._queue = Queue(maxsize=QUEUE_CAPACITY)
@@ -101,7 +101,7 @@ class Handler:
 
 	def save(self):
 		base = Path(self.cfg.graph_path).with_suffix("")
-		save_all(self.graph, self.model, self.Shard, base)
+		save_all(self.graph, self.model, self.shard, base)
 
 	def shutdown(self):
 		self._shutdown.set()
@@ -190,8 +190,8 @@ class Handler:
 	def ask(self, query: str, cluster: str | None = None) -> tuple[str, list[dict]]:
 		"""Retrieval pipeline: score + expand → deduplicate → rate → answer.
 
-		When `cluster` is provided, only Shards in that cluster group are queried.
-		Otherwise, the default graph + all registered Shards are queried.
+		When `cluster` is provided, only shards in that cluster group are queried.
+		Otherwise, the default graph + all registered shards are queried.
 		"""
 		query_emb = self.provider.embed_text(query)
 
@@ -199,40 +199,40 @@ class Handler:
 		all_chains: list[PathChain] = []
 
 		if cluster:
-			# Scoped query: only Shards in this cluster
+			# Scoped query: only shards in this cluster
 			store_names = self.registry.stores_in_cluster(cluster)
 			for sname in store_names:
-				Shard = self._Shards.get(sname)
-				if Shard is None:
+				shard = self._shards.get(sname)
+				if shard is None:
 					continue
 				try:
-					Shard_scored, Shard_chains = self._score_Shard(query_emb, Shard.graph, Shard.model, Shard.Shard)
-					all_scored.append(Shard_scored)
-					all_chains.extend(Shard_chains)
+					shard_scored, shard_chains = self._score_shard(query_emb, shard.graph, shard.model, shard.shard)
+					all_scored.append(shard_scored)
+					all_chains.extend(shard_chains)
 				except Exception:
 					log.warning("Shard '%s' query failed", sname, exc_info=True)
 		else:
-			# Full query: default graph + all Shards
-			local_scored, local_chains = self._score_Shard(query_emb, self.graph, self.model, self.Shard)
+			# Full query: default graph + all shards
+			local_scored, local_chains = self._score_shard(query_emb, self.graph, self.model, self.shard)
 			all_scored.append(local_scored)
 			all_chains.extend(local_chains)
 
-			for name, Shard in self._Shards.items():
-				# Profile-based routing: skip Shards below similarity threshold
-				if Shard.graph.profile is not None:
-					sim = cosine(Shard.graph.profile, query_emb)
+			for name, shard in self._shards.items():
+				# Profile-based routing: skip shards below similarity threshold
+				if shard.graph.profile is not None:
+					sim = cosine(shard.graph.profile, query_emb)
 					if sim < self.cfg.query_routing_threshold:
 						log.debug("Shard '%s' profile sim=%.3f < %.3f, skipping", name, sim, self.cfg.query_routing_threshold)
 						continue
 					log.debug("Shard '%s' profile sim=%.3f >= %.3f, including", name, sim, self.cfg.query_routing_threshold)
 				try:
-					Shard_scored, Shard_chains = self._score_Shard(query_emb, Shard.graph, Shard.model, Shard.Shard)
-					all_scored.append(Shard_scored)
-					all_chains.extend(Shard_chains)
+					shard_scored, shard_chains = self._score_shard(query_emb, shard.graph, shard.model, shard.shard)
+					all_scored.append(shard_scored)
+					all_chains.extend(shard_chains)
 				except Exception:
 					log.warning("Shard '%s' query failed", name, exc_info=True)
 
-		# Deduplicate across Shards
+		# Deduplicate across shards
 		scored = deduplicate(all_scored, self.cfg.top_k)
 		if not scored:
 			return "No relevant knowledge found.", []
@@ -263,8 +263,8 @@ class Handler:
 				dampen=self.cfg.refinement_dampen,
 				min_traversals=self.cfg.refinement_min_traversals,
 			)
-			for Shard in self._Shards.values():
-				Shard.graph.refine_edges(
+			for shard in self._shards.values():
+				shard.graph.refine_edges(
 					boost=self.cfg.refinement_boost,
 					dampen=self.cfg.refinement_dampen,
 					min_traversals=self.cfg.refinement_min_traversals,
@@ -274,13 +274,13 @@ class Handler:
 		return text, sources
 
 	def find_thoughts_by_query(self, query: str, k: int = 5) -> list[dict]:
-		"""Embed query and search for semantically similar thoughts across all Shards."""
+		"""Embed query and search for semantically similar thoughts across all shards."""
 		emb = self.provider.embed_text(query)
 		# Search global graph
 		all_neighbors: list[tuple] = list(self.graph.find_thoughts(emb, k=k, threshold=self.cfg.similarity_threshold))
-		# Search every Shard
-		for Shard in self._Shards.values():
-			all_neighbors.extend(Shard.graph.find_thoughts(emb, k=k, threshold=self.cfg.similarity_threshold))
+		# Search every shard
+		for shard in self._shards.values():
+			all_neighbors.extend(shard.graph.find_thoughts(emb, k=k, threshold=self.cfg.similarity_threshold))
 		# Sort by similarity descending, deduplicate by text, return top-k
 		seen: set[str] = set()
 		results = []
@@ -389,7 +389,7 @@ class Handler:
 		"""Resolve a descriptor name to its text. Returns '' if not found."""
 		return self.graph.descriptors.get(name, "")
 
-	def create_Shard(self, name: str, purpose: str, location: str, cluster: str | None = None) -> str:
+	def create_shard(self, name: str, purpose: str, location: str, cluster: str | None = None) -> str:
 		"""Create a new Shard graph, save it, and register it.
 
 		Returns the graph file path.
@@ -404,8 +404,8 @@ class Handler:
 			max_edges=self.cfg.max_edges,
 		)
 		model = ShardMPNN(self.cfg)
-		Shard = ShardLayer(self.cfg.hidden_dim)
-		save_all(graph, model, Shard, base)
+		shard = ShardLayer(self.cfg.hidden_dim)
+		save_all(graph, model, shard, base)
 
 		graph_path = str(hashed)
 		self.registry.register(graph_path)
@@ -415,28 +415,28 @@ class Handler:
 
 		return graph_path
 
-	def ingest_into_Shard(
+	def ingest_into_shard(
 		self,
-		Shard_name: str,
+		shard_name: str,
 		text: str,
 		source: str = "",
 		descriptor: str = "",
 	) -> int:
-		"""Ingest text directly into a named Shard graph. Returns number committed."""
-		s = self._Shards.get(Shard_name)
+		"""Ingest text directly into a named shard graph. Returns number committed."""
+		s = self._shards.get(shard_name)
 		if s is None:
-			raise KeyError(f"Shard '{Shard_name}' not loaded")
+			raise KeyError(f"Shard '{shard_name}' not loaded")
 		ingester = Ingester(s.graph, self.provider, self.cfg)
 		result = ingester.ingest(text, source=source, descriptor=descriptor)
 		return len(result.committed)
 
 	def ingested_sources(self) -> set[str]:
-		"""Return the set of all source strings already in the graph and all Shards."""
+		"""Return the set of all source strings already in the graph and all shards."""
 		sources: set[str] = set()
 		for t in self.graph.thoughts.values():
 			sources.add(t.source)
-		for Shard in self._Shards.values():
-			for t in Shard.graph.thoughts.values():
+		for shard in self._shards.values():
+			for t in shard.graph.thoughts.values():
 				sources.add(t.source)
 		return sources
 
@@ -498,8 +498,8 @@ class Handler:
 				)
 
 		_collect(self.graph, "global")
-		for name, Shard in sorted(self._Shards.items()):
-			_collect(Shard.graph, name)
+		for name, shard in sorted(self._shards.items()):
+			_collect(shard.graph, name)
 
 		if thought_vectors:
 			min_dim = min(vec.shape[0] for _, vec in thought_vectors)
@@ -521,21 +521,21 @@ class Handler:
 			for (node, _), pos in zip(thought_vectors, normalized, strict=False):
 				node["embed_pos"] = [round(float(v), 4) for v in pos[:3]]
 
-		# Add Shard hub nodes and link each Shard's thoughts to it
-		for name, Shard in self._Shards.items():
-			hub_key = f"_Shard:{name}"
+		# Add shard hub nodes and link each shard's thoughts to it
+		for name, shard in self._shards.items():
+			hub_key = f"_shard:{name}"
 			nodes.append(
 				{
 					"key": hub_key,
 					"label": name,
 					"source": "",
 					"store": name,
-					"type": "Shard",
+					"type": "shard",
 					"access_count": 0,
 					"created_at": 0,
 				}
 			)
-			for t in Shard.graph.thoughts.values():
+			for t in shard.graph.thoughts.values():
 				edge_key = (hub_key, f"{name}:{t.id}")
 				if edge_key not in seen_edge_keys:
 					seen_edge_keys.add(edge_key)
@@ -640,7 +640,7 @@ class Handler:
 	def relink(self) -> dict:
 		"""Scan all thoughts and create missing edges between similar pairs.
 
-		Works on the global graph and all Shards. Uses the LLM to
+		Works on the global graph and all shards. Uses the LLM to
 		generate link reasoning for newly discovered connections.
 		"""
 		total_created = 0
@@ -711,8 +711,8 @@ class Handler:
 
 		with self.mu:
 			total_created += _relink_graph(self.graph)
-			for name, Shard in self._Shards.items():
-				total_created += _relink_graph(Shard.graph)
+			for name, shard in self._shards.items():
+				total_created += _relink_graph(shard.graph)
 
 			if total_created > 0:
 				self.save()
@@ -728,18 +728,18 @@ class Handler:
 	def explore_thought(self, thought_id: int) -> dict | None:
 		"""Return a thought with its edges and neighbors, or None if not found.
 
-		Searches the global graph and all Shards.
+		Searches the global graph and all shards.
 		"""
 		# Search global graph first
 		graph, store = self.graph, "global"
 		thought = graph.thoughts.get(thought_id)
 
-		# If not in global, search Shards
+		# If not in global, search shards
 		if thought is None:
-			for name, Shard in self._Shards.items():
-				thought = Shard.graph.thoughts.get(thought_id)
+			for name, shard in self._shards.items():
+				thought = shard.graph.thoughts.get(thought_id)
 				if thought is not None:
-					graph, store = Shard.graph, name
+					graph, store = shard.graph, name
 					break
 
 		if thought is None:
@@ -775,14 +775,14 @@ class Handler:
 	def traverse(self, start_id: int, depth: int = 2, max_nodes: int = 50) -> dict | None:
 		"""BFS from a thought, returning the local subgraph.
 
-		Searches across the global graph and all Shards.
+		Searches across the global graph and all shards.
 		"""
 		# Find the starting thought and its graph
 		graph, store = self.graph, "global"
 		if start_id not in graph.thoughts:
-			for name, Shard in self._Shards.items():
-				if start_id in Shard.graph.thoughts:
-					graph, store = Shard.graph, name
+			for name, shard in self._shards.items():
+				if start_id in shard.graph.thoughts:
+					graph, store = shard.graph, name
 					break
 			else:
 				return None
@@ -840,7 +840,7 @@ class Handler:
 		}
 
 	def graph_stats(self) -> dict:
-		"""Aggregate statistics across the global graph and all Shards."""
+		"""Aggregate statistics across the global graph and all shards."""
 
 		def _edge_stats(edges):
 			if not edges:
@@ -863,28 +863,28 @@ class Handler:
 				"avg_edge_weight": avg_w,
 				"avg_edge_success_rate": avg_sr,
 			},
-			"Shards": [],
+			"shards": [],
 		}
 		for name, entry in self._index.items():
-			Shard = self._Shards.get(name)
-			Shard_entry = {
+			shard = self._shards.get(name)
+			entry = {
 				"name": entry.name,
 				"purpose": entry.purpose,
 				"thoughts": entry.num_thoughts,
 				"edges": entry.num_edges,
 			}
-			if Shard:
-				sw, ssr = _edge_stats(Shard.graph.edges)
-				Shard_entry["maturity"] = round(Shard.graph.maturity, 3)
-				Shard_entry["avg_edge_weight"] = sw
-				Shard_entry["avg_edge_success_rate"] = ssr
-			stats["Shards"].append(Shard_entry)
+			if shard:
+				sw, ssr = _edge_stats(shard.graph.edges)
+				entry["maturity"] = round(shard.graph.maturity, 3)
+				entry["avg_edge_weight"] = sw
+				entry["avg_edge_success_rate"] = ssr
+			stats["shards"].append(entry)
 
-		stats["total_Shards"] = len(self._index)
+		stats["total_shards"] = len(self._index)
 		return stats
 
-	def list_Shards(self) -> list[dict]:
-		"""Return metadata for all loaded Shards, including cluster membership."""
+	def list_shards(self) -> list[dict]:
+		"""Return metadata for all loaded shards, including cluster membership."""
 		# Build reverse index: store_name → list of clusters it belongs to
 		cluster_membership: dict[str, list[str]] = {}
 		for cluster_name, members in self.registry.clusters.items():
@@ -927,17 +927,17 @@ class Handler:
 			except Exception:
 				log.exception("Event listener raised for kind=%s", event.kind)
 
-	def _upsert_Shard_node(self, name: str, Shard: "Shard"):
-		"""Upsert a registry node for this Shard in the global graph.
+	def _upsert_shard_node(self, name: str, shard: "shard"):
+		"""Upsert a registry node for this shard in the global graph.
 
-		Embeds the Shard's aggregate profile as a thought in the global graph
-		so the GNN learns where each Shard lives in the full knowledge network.
+		Embeds the shard's aggregate profile as a thought in the global graph
+		so the GNN learns where each shard lives in the full knowledge network.
 		"""
-		if Shard.graph.profile is None:
+		if shard.graph.profile is None:
 			return
 
-		profile = Shard.graph.profile.copy()
-		text = f"[Shard:{name}] {Shard.purpose}"
+		profile = shard.graph.profile.copy()
+		text = f"[shard:{name}] {shard.purpose}"
 
 		existing_tid = self.graph._registry_nodes.get(name)
 		if existing_tid and existing_tid in self.graph.thoughts:
@@ -962,8 +962,8 @@ class Handler:
 						embedding=profile,
 					)
 
-	def _load_Shards(self):
-		"""Load all registered Shards into cache, build index, and upsert registry nodes."""
+	def _load_shards(self):
+		"""Load all registered shards into cache, build index, and upsert registry nodes."""
 		stale: list[str] = []
 		for name, entry in self.registry.stores.items():
 			try:
@@ -973,13 +973,13 @@ class Handler:
 					stale.append(name)
 					continue
 				base = Path(graph_path).with_suffix("")
-				graph, model, Shard_layer = load_all(self.cfg, base)
-				self._Shards[name] = Shard(
+				graph, model, shard_layer = load_all(self.cfg, base)
+				self._shards[name] = Shard(
 					name=name,
 					purpose=entry.get("purpose", "") or graph.purpose,
 					graph=graph,
 					model=model,
-					Shard=Shard_layer,
+					shard=shard_layer,
 				)
 				# Build index entry from loaded graph metadata
 				self._index[name] = ShardIndexEntry(
@@ -1001,16 +1001,16 @@ class Handler:
 
 		log.info("Shard index: %d entries loaded", len(self._index))
 
-		# Upsert registry nodes so the global graph knows about all Shards
-		for name, Shard in self._Shards.items():
-			self._upsert_Shard_node(name, Shard)
+		# Upsert registry nodes so the global graph knows about all shards
+		for name, shard in self._shards.items():
+			self._upsert_shard_node(name, shard)
 
-	def _score_Shard(
+	def _score_shard(
 		self,
 		query_emb,
 		graph: Graph,
 		model: ShardMPNN,
-		Shard: ShardLayer,
+		shard: ShardLayer,
 	) -> tuple[list[tuple], list[PathChain]]:
 		"""Run all three scoring signals + merge + expand for one Shard.
 
@@ -1026,7 +1026,7 @@ class Handler:
 
 		cos = cosine_scores(query_emb, graph)
 		try:
-			gnn = gnn_scores(query_emb, graph, model, Shard)
+			gnn = gnn_scores(query_emb, graph, model, shard)
 		except Exception:
 			log.debug("GNN scoring failed", exc_info=True)
 			gnn = {}
@@ -1068,38 +1068,38 @@ class Handler:
 			return
 
 		promoted_indices: set[int] = set()
-		modified_Shards: set[str] = set()
+		modified_shards: set[str] = set()
 		for cluster_indices in clusters:
 			cluster_thoughts = [self.graph.limbo[i] for i in cluster_indices]
 			try:
-				Shard_name = promote_cluster(
+				shard_name = promote_cluster(
 					cluster_thoughts,
-					self._Shards,
+					self._shards,
 					self.provider,
 					self.cfg,
 					self.registry,
 					self.cfg.graph_path,
 				)
 				promoted_indices.update(cluster_indices)
-				if Shard_name:
-					modified_Shards.add(Shard_name)
+				if shard_name:
+					modified_shards.add(shard_name)
 			except Exception:
 				log.exception("Cluster promotion failed")
 
 		if promoted_indices:
 			self.graph.limbo = [lt for i, lt in enumerate(self.graph.limbo) if i not in promoted_indices]
 
-		# Upsert registry nodes for modified Shards into global graph
-		for Shard_name in modified_Shards:
-			if Shard_name in self._Shards:
-				self._upsert_Shard_node(Shard_name, self._Shards[Shard_name])
+		# Upsert registry nodes for modified shards into global graph
+		for shard_name in modified_shards:
+			if shard_name in self._shards:
+				self._upsert_shard_node(shard_name, self._shards[shard_name])
 			self._fire_event(
 				GraphEvent(
 					kind="limbo_promoted",
 					thoughts=self.graph.num_thoughts,
 					edges=self.graph.num_edges,
 					committed=0,
-					detail={"Shard": Shard_name},
+					detail={"shard": shard_name},
 				)
 			)
 
@@ -1117,19 +1117,19 @@ class Handler:
 	def _poll_stores(self):
 		"""Check registry for new stores and load them."""
 		current_stores = set(self.registry.stores.keys())
-		loaded_stores = set(self._Shards.keys())
+		loaded_stores = set(self._shards.keys())
 
 		# Initialize on first poll
-		if not self._last_Shard_state:
+		if not self._last_shard_state:
 			for name in loaded_stores:
-				Shard = self._Shards.get(name)
-				if Shard:
-					self._last_Shard_state[name] = (Shard.graph.num_thoughts, Shard.graph.num_edges)
+				shard = self._shards.get(name)
+				if shard:
+					self._last_shard_state[name] = (shard.graph.num_thoughts, shard.graph.num_edges)
 			return
 
 		# Check for new stores
 		new_stores = current_stores - loaded_stores
-		loaded_before = set(self._Shards.keys())
+		loaded_before = set(self._shards.keys())
 
 		for name in new_stores:
 			entry = self.registry.stores.get(name)
@@ -1141,13 +1141,13 @@ class Handler:
 				continue
 			try:
 				base = Path(graph_path).with_suffix("")
-				graph, model, Shard_layer = load_all(self.cfg, base)
-				self._Shards[name] = Shard(
+				graph, model, shard_layer = load_all(self.cfg, base)
+				self._shards[name] = shard(
 					name=name,
 					purpose=entry.get("purpose", "") or graph.purpose,
 					graph=graph,
 					model=model,
-					Shard=Shard_layer,
+					shard=shard_layer,
 				)
 				self._index[name] = ShardIndexEntry(
 					name=name,
@@ -1157,7 +1157,7 @@ class Handler:
 					num_thoughts=graph.num_thoughts,
 					num_edges=graph.num_edges,
 				)
-				self._upsert_Shard_node(name, self._Shards[name])
+				self._upsert_shard_node(name, self._shards[name])
 				log.info("Loaded new store '%s' (%d thoughts, %d edges)", name, graph.num_thoughts, graph.num_edges)
 				self._fire_event(
 					GraphEvent(
@@ -1174,10 +1174,10 @@ class Handler:
 		# Check for removed stores
 		removed_stores = loaded_stores - current_stores
 		for name in removed_stores:
-			del self._Shards[name]
+			del self._shards[name]
 			self._index.pop(name, None)
 			self.graph._registry_nodes.pop(name, None)
-			self._last_Shard_state.pop(name, None)
+			self._last_shard_state.pop(name, None)
 			log.info("Removed store '%s'", name)
 			self._fire_event(
 				GraphEvent(
@@ -1190,11 +1190,11 @@ class Handler:
 			)
 
 		# Track changes to existing stores
-		for name, Shard in self._Shards.items():
-			prev = self._last_Shard_state.get(name, (0, 0))
-			curr = (Shard.graph.num_thoughts, Shard.graph.num_edges)
+		for name, shard in self._shards.items():
+			prev = self._last_shard_state.get(name, (0, 0))
+			curr = (shard.graph.num_thoughts, shard.graph.num_edges)
 			if curr != prev:
-				self._last_Shard_state[name] = curr
+				self._last_shard_state[name] = curr
 				self._fire_event(
 					GraphEvent(
 						kind="store_changed",

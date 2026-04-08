@@ -22,7 +22,7 @@ class Registry:
 
 	def _read_metadata(self, path: str) -> dict | None:
 		try:
-			from .Shard.store import read_shard_metadata
+			from .shard.store import read_shard_metadata
 
 			meta = read_shard_metadata(path)
 			return meta

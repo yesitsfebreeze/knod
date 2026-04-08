@@ -49,12 +49,12 @@ def main():
 	corpus_cmd.add_argument("--dir", type=str, default="corpus")
 	corpus_cmd.add_argument("--graph", type=str, default=None)
 
-	# new — create a new Shard interactively
-	new_cmd = sub.add_parser("new", help="Create a new Shard graph")
+	# new — create a new shard interactively
+	new_cmd = sub.add_parser("new", help="Create a new shard")
 	new_cmd.add_argument("--cluster", type=str, default=None, help="Add to cluster")
 
-	# register — register an existing graph file
-	register_cmd = sub.add_parser("register", help="Register an existing graph file")
+	# register — register an existing shard file
+	register_cmd = sub.add_parser("register", help="Register an existing shard file")
 	register_cmd.add_argument("path", type=str, help="Path to .shard file")
 	register_cmd.add_argument("--cluster", type=str, default=None, help="Add to cluster")
 
@@ -239,7 +239,7 @@ def _do_ingest_file(cfg: Config, filepath: str, descriptor: str = "", cluster: s
 			return
 		for sname in store_names:
 			try:
-				n = handler.ingest_into_Shard(sname, text, source=Path(filepath).stem, descriptor=descriptor)
+				n = handler.ingest_into_shard(sname, text, source=Path(filepath).stem, descriptor=descriptor)
 				log.info("%s: %d thoughts committed", sname, n)
 			except KeyError:
 				log.info("%s: not loaded, skipping", sname)
@@ -337,19 +337,19 @@ def _do_new(cfg: Config, cluster: str | None = None):
 		location = str(Path.cwd())
 
 	handler = _load_handler(cfg)
-	graph_path = handler.create_Shard(name, purpose, location, cluster=cluster)
+	graph_path = handler.create_shard(name, purpose, location, cluster=cluster)
 
 	if cluster:
 		log.info("Added to cluster '%s'", cluster)
 
-	log.info("Created Shard '%s' at %s", name, graph_path)
+	log.info("Created shard '%s' at %s", name, graph_path)
 	handler.shutdown()
 
 
 def _do_register(cfg: Config, path: str, cluster: str | None = None):
 	log = logging.getLogger(__name__)
 	from .registry import Registry
-	from .Shard.store import read_shard_metadata
+	from .shard.store import read_shard_metadata
 
 	graph_path = Path(path)
 	if not graph_path.exists():

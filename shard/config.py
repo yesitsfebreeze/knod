@@ -38,9 +38,9 @@ class Config:
 	limbo_scan_interval: float = 60.0  # seconds between scans
 	limbo_cluster_min: int = 3  # minimum cluster size to promote
 	limbo_cluster_threshold: float = 0.50  # cosine threshold for clustering
-	Shard_match_threshold: float = 0.8
+	shard_match_threshold: float = 0.8
 	confidence_threshold: float = 0.85
-	query_routing_threshold: float = 0.3  # min profile similarity to include Shard in query
+	query_routing_threshold: float = 0.3  # min profile similarity to include shard in query
 	traversal_depth: int = 2  # max hops in Dijkstra path expansion
 	traversal_fan_out: int = 10  # max new nodes discovered per expand() call
 	refinement_interval: int = 10  # refine edge weights every N retrievals

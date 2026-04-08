@@ -204,25 +204,25 @@ const DEFAULT_THEME_ID = "default-dark";
 function mixRgb(a, b, t) {
 	return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
 }
-function hexToColor(hex) {
+function hex_to_color(hex) {
 	const value = String(hex || "").replace(/^#/, "");
 	const normalized = value.length === 3 ? value.split("").map(ch => ch + ch).join("") : value;
 	return [0, 2, 4].map(index => parseInt(normalized.slice(index, index + 2), 16) / 255);
 }
-function colorDistance(a, b) {
+function color_distance(a, b) {
 	return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 }
 function modulateConsoleColor(color, background, foreground) {
 	let next = mixRgb(color, foreground, 0.12);
-	if (colorDistance(next, background) < 0.28) next = mixRgb(next, foreground, 0.28);
-	if (colorDistance(next, background) < 0.36) next = mixRgb(next, foreground, 0.18);
+	if (color_distance(next, background) < 0.28) next = mixRgb(next, foreground, 0.28);
+	if (color_distance(next, background) < 0.36) next = mixRgb(next, foreground, 0.18);
 	return next;
 }
-function compileTheme(spec) {
-	const background = hexToColor(spec.base.base00);
-	const foreground = hexToColor(spec.base.base05);
-	const cursor = hexToColor(spec.cursor || spec.base.base0D);
-	const ansi = ANSI_THEME_ORDER.map(key => hexToColor(spec.base[key]));
+function compile_theme(spec) {
+	const background = hex_to_color(spec.base.base00);
+	const foreground = hex_to_color(spec.base.base05);
+	const cursor = hex_to_color(spec.cursor || spec.base.base0D);
+	const ansi = ANSI_THEME_ORDER.map(key => hex_to_color(spec.base[key]));
 	return {
 		id: spec.id,
 		name: spec.name,
@@ -237,19 +237,19 @@ function compileTheme(spec) {
 		cursorHex: `#${spec.cursor || spec.base.base0D}`,
 		ansiHex: ANSI_THEME_ORDER.map(key => `#${spec.base[key]}`),
 		accents: {
-			red: hexToColor(spec.base.base08),
-			orange: hexToColor(spec.base.base09),
-			yellow: hexToColor(spec.base.base0A),
-			green: hexToColor(spec.base.base0B),
-			cyan: hexToColor(spec.base.base0C),
-			blue: hexToColor(spec.base.base0D),
-			magenta: hexToColor(spec.base.base0E),
-			brown: hexToColor(spec.base.base0F),
-			muted: hexToColor(spec.base.base03),
+			red: hex_to_color(spec.base.base08),
+			orange: hex_to_color(spec.base.base09),
+			yellow: hex_to_color(spec.base.base0A),
+			green: hex_to_color(spec.base.base0B),
+			cyan: hex_to_color(spec.base.base0C),
+			blue: hex_to_color(spec.base.base0D),
+			magenta: hex_to_color(spec.base.base0E),
+			brown: hex_to_color(spec.base.base0F),
+			muted: hex_to_color(spec.base.base03),
 		},
 	};
 }
-const THEMES = BASE16_THEME_SPECS.map(compileTheme);
+const THEMES = BASE16_THEME_SPECS.map(compile_theme);
 const POLY_R = 1.8;
 const FOV = 65 * Math.PI / 180;
 const ZOOM_IN = 0.84;
@@ -283,8 +283,8 @@ const EDGE_MARKER_MIN_FOCUS_ALPHA = 0.26;
 const EDGE_MARKER_HOVER_BOOST = 0.18;
 const SETTINGS_STORAGE_KEY = "shard.viz.settings.v1";
 const EDGE_MARKER_T = 0.62;
-const Shard_RING_RADIUS = POLY_R * 1.36;
-const Shard_INNER_PULL = 0.72;
+const SHARD_RING_RADIUS = POLY_R * 1.36;
+const SHARD_INNER_PULL = 0.72;
 const THOUGHT_SPIRAL_RADIUS = POLY_R * 0.28;
 const GLOBAL_SPIRAL_RADIUS = POLY_R * 0.22;
 const SPIRAL_TURN_BASE = 1.15;
@@ -319,16 +319,16 @@ function m4Trans(x, y, z) { const m = m4(); m[12] = x; m[13] = y; m[14] = z; ret
 // ---- state ----
 const cvs = document.getElementById("canvas");
 let W, H, dpr;
-let allNodes = [], tagNodes = [], thoughtNodes = [], edges = [];
-let nodeIdx = {}, nbrs = {}, edgeAdj = {};
-let storeClr = {}, clrI = 0;
-let layoutState = { tagPos: {}, angleOf: {} };
-let dimensionTags = [], dimensionControlEls = new Map();
-let dimensionWeights = new Map(), dimensionVectors = new Map();
-let dimensionSelection = { strength: 0, boosted: new Set(), suppressed: new Set(), deltas: new Map(), boosts: new Map(), fades: new Map() };
-let spiralHeightScale = SPIRAL_HEIGHT_DEFAULT;
-let spiralSpreadScale = SPIRAL_SPREAD_DEFAULT;
-let edgeOpacityScale = EDGE_OPACITY_DEFAULT;
+let all_nodes = [], tag_nodes = [], thought_nodes = [], edges = [];
+let node_idx = {}, nbrs = {}, edgeAdj = {};
+let store_clr = {}, clrI = 0;
+let layout_state = { tagPos: {}, angleOf: {} };
+let dimension_tags = [], dimensionControlEls = new Map();
+let dimension_weights = new Map(), dimension_vectors = new Map();
+let dimension_selection = { strength: 0, boosted: new Set(), suppressed: new Set(), deltas: new Map(), boosts: new Map(), fades: new Map() };
+let spiral_height_scale = SPIRAL_HEIGHT_DEFAULT;
+let spiral_spread_scale = SPIRAL_SPREAD_DEFAULT;
+let edge_opacity_scale = EDGE_OPACITY_DEFAULT;
 let recencyRecentKey = "cyan";
 let recencyOldKey = "magenta";
 const RECENCY_COLOR_OPTIONS = ["red", "orange", "yellow", "green", "cyan", "blue", "magenta", "brown"];
@@ -341,7 +341,7 @@ let vYaw = 0.002, vPitch = 0;
 const DAMP = 0.97, SENS = 0.005;
 let drag = false, lmx = 0, lmy = 0;
 let pointerGesture = null;
-let graphCenter = [0, 0, 0], orbitCenter = [0, 0, 0], orbitTarget = [0, 0, 0], graphRadius = POLY_R, minDist = 0.7, baseMinDist = 0.7, maxDist = 6, resetDist = 3;
+let graph_center = [0, 0, 0], orbitCenter = [0, 0, 0], orbitTarget = [0, 0, 0], graph_radius = POLY_R, min_dist = 0.7, base_min_dist = 0.7, maxDist = 6, reset_dist = 3;
 let frameHandle = 0;
 
 // pick
@@ -354,7 +354,7 @@ ov.style.cssText = "position:absolute;inset:0;z-index:1;pointer-events:none;";
 document.body.appendChild(ov);
 const oc = ov.getContext("2d");
 
-function sClr(s) { if (!storeClr[s]) storeClr[s] = currentTheme.palette[clrI++ % currentTheme.palette.length]; return storeClr[s]; }
+function sClr(s) { if (!store_clr[s]) store_clr[s] = currentTheme.palette[clrI++ % currentTheme.palette.length]; return store_clr[s]; }
 function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 function lerp(a, b, t) { return a + (b - a) * t; }
 function smoothstep(a, b, v) {
@@ -416,9 +416,9 @@ function applyThemeToDocument(theme) {
 	root.dataset.theme = theme.id;
 }
 function recolorNodesForTheme() {
-	storeClr = {};
+	store_clr = {};
 	clrI = 0;
-	for (const node of allNodes) {
+	for (const node of all_nodes) {
 		node.color = recencyColor(node.recency || 0);
 	}
 }
@@ -433,13 +433,13 @@ function applyTheme(themeId, { persist = true, recolorNodes = true, refresh = tr
 	currentTheme = getThemeById(themeId);
 	applyThemeToDocument(currentTheme);
 	syncThemeControls();
-	if (recolorNodes && allNodes.length) recolorNodesForTheme();
+	if (recolorNodes && all_nodes.length) recolorNodesForTheme();
 	if (refresh) {
-		if (bufs) refreshSceneBuffers();
+		if (bufs) refresh_scene_buffers();
 		if (selected) showDetail(selected);
 		requestRender();
 	}
-	if (persist) writeStoredVizSettings();
+	if (persist) write_stored_viz_settings();
 }
 function vec3Length(v) {
 	return Math.hypot(v[0], v[1], v[2]);
@@ -535,10 +535,10 @@ function collectNodeTagSignals(n) {
 	return signals;
 }
 function getDimensionWeight(tagKey) {
-	return dimensionWeights.get(tagKey) ?? getBaselineDimensionWeight();
+	return dimension_weights.get(tagKey) ?? getBaselineDimensionWeight();
 }
 function getBaselineDimensionWeight() {
-	return dimensionTags.length ? 1 / dimensionTags.length : 1;
+	return dimension_tags.length ? 1 / dimension_tags.length : 1;
 }
 function getDimensionRatio(weight) {
 	const baseline = getBaselineDimensionWeight();
@@ -558,7 +558,7 @@ function weightToSliderPosition(weight) {
 	return 0.5 + 0.5 * ((w - baseline) / (1 - baseline));
 }
 function getDimensionSliderPosition(tagKey) {
-	if (!tagKey || !dimensionWeights.has(tagKey)) return 0.5;
+	if (!tagKey || !dimension_weights.has(tagKey)) return 0.5;
 	return clamp(weightToSliderPosition(getDimensionWeight(tagKey)), 0, 1);
 }
 function applySliderOpacity(baseAlpha, sliderPosition) {
@@ -566,24 +566,24 @@ function applySliderOpacity(baseAlpha, sliderPosition) {
 	if (position <= 0.5) return baseAlpha * (position / 0.5);
 	return baseAlpha;
 }
-function getSpiralHeightSpan() {
-	return clamp(spiralHeightScale, 0, SPIRAL_HEIGHT_MAX);
+function get_spiral_height_span() {
+	return clamp(spiral_height_scale, 0, SPIRAL_HEIGHT_MAX);
 }
 function isSpiralInverted() {
-	return spiralSpreadScale < 0;
+	return spiral_spread_scale < 0;
 }
 function getSpiralHeightTwistScale() {
 	const blend = getSpiralSphereBlend();
 	return isSpiralInverted() ? -blend : blend;
 }
 function getSpiralSphereBlend() {
-	return clamp(Math.abs(spiralSpreadScale), 0, 1);
+	return clamp(Math.abs(spiral_spread_scale), 0, 1);
 }
 function getSpiralHeightLabel() {
-	return `${getSpiralHeightSpan().toFixed(1)} y-span`;
+	return `${get_spiral_height_span().toFixed(1)} y-span`;
 }
 function getSpiralSpreadScale() {
-	return clamp(spiralSpreadScale, -1, 1);
+	return clamp(spiral_spread_scale, -1, 1);
 }
 function getSpiralSpreadLabel() {
 	const blend = getSpiralSphereBlend();
@@ -594,7 +594,7 @@ function getSpiralSpreadLabel() {
 	return `${Math.round((1 - blend) * 100)}% spiral · ${Math.round(blend * 100)}% Fibonacci · ${Math.round(blend * 180)}° twist`;
 }
 function getEdgeOpacityScale() {
-	return clamp(edgeOpacityScale, 0, 1);
+	return clamp(edge_opacity_scale, 0, 1);
 }
 function getEdgeOpacityLabel() {
 	return `${getEdgeOpacityScale().toFixed(2)} alpha`;
@@ -609,13 +609,13 @@ function readStoredVizSettings() {
 		return null;
 	}
 }
-function writeStoredVizSettings() {
+function write_stored_viz_settings() {
 	try {
 		window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify({
 			themeId: currentTheme.id,
-			spiralHeightScale,
-			spiralSpreadScale,
-			edgeOpacityScale,
+			spiral_height_scale,
+			spiral_spread_scale,
+			edge_opacity_scale,
 			recencyRecentKey,
 			recencyOldKey,
 		}));
@@ -631,14 +631,14 @@ function loadStoredVizSettings() {
 		currentTheme = getThemeById(stored.themeId);
 	}
 
-	if (Number.isFinite(stored.spiralHeightScale)) {
-		spiralHeightScale = clamp(stored.spiralHeightScale, 0, SPIRAL_HEIGHT_MAX);
+	if (Number.isFinite(stored.spiral_height_scale)) {
+		spiral_height_scale = clamp(stored.spiral_height_scale, 0, SPIRAL_HEIGHT_MAX);
 	}
-	if (Number.isFinite(stored.spiralSpreadScale)) {
-		spiralSpreadScale = clamp(stored.spiralSpreadScale, -1, 1);
+	if (Number.isFinite(stored.spiral_spread_scale)) {
+		spiral_spread_scale = clamp(stored.spiral_spread_scale, -1, 1);
 	}
-	if (Number.isFinite(stored.edgeOpacityScale)) {
-		edgeOpacityScale = clamp(stored.edgeOpacityScale, 0, 1);
+	if (Number.isFinite(stored.edge_opacity_scale)) {
+		edge_opacity_scale = clamp(stored.edge_opacity_scale, 0, 1);
 	}
 	if (typeof stored.recencyRecentKey === "string" && RECENCY_COLOR_OPTIONS.includes(stored.recencyRecentKey)) {
 		recencyRecentKey = stored.recencyRecentKey;
@@ -680,8 +680,8 @@ function twistPositionByHeight(pos, minY, maxY) {
 function getSpiralTurns(count) {
 	return SPIRAL_TURN_BASE + Math.min(2.2, Math.max(0, count - 1) * SPIRAL_TURN_GROWTH);
 }
-function getSpiralSphereScale(rankT) {
-	const clampedRank = clamp(rankT, 0, 1);
+function get_spiral_sphere_scale(rank_t) {
+	const clampedRank = clamp(rank_t, 0, 1);
 	const y = 1 - clampedRank * 2;
 	const surfaceRadius = Math.sqrt(Math.max(0, 1 - y * y));
 	const blend = getSpiralSphereBlend();
@@ -691,29 +691,29 @@ function getSpiralSphereScale(rankT) {
 	}
 	return lerp(1, surfaceRadius, blend);
 }
-function sortNodesForSpiral(nodes) {
+function sort_nodes_for_spiral(nodes) {
 	return [...nodes].sort((a, b) => {
 		if ((a.importance || 0) !== (b.importance || 0)) return (a.importance || 0) - (b.importance || 0);
 		return String(a.label || a.key).localeCompare(String(b.label || b.key));
 	});
 }
 function getEdgeSliderPosition(edge) {
-	return ((edge.s.dimensionOpacity ?? 0.5) + (edge.t.dimensionOpacity ?? 0.5)) * 0.5;
+	return ((edge.s.dimension_opacity ?? 0.5) + (edge.t.dimension_opacity ?? 0.5)) * 0.5;
 }
 function describeDimensionState() {
-	if (!dimensionTags.length) return "no strong graph tags detected yet";
+	if (!dimension_tags.length) return "no strong graph tags detected yet";
 	const baseline = getBaselineDimensionWeight();
-	const boosted = dimensionTags
+	const boosted = dimension_tags
 		.map(tag => ({ tag, weight: getDimensionWeight(tag.key) }))
 		.filter(entry => entry.weight > baseline * 1.15)
 		.sort((a, b) => b.weight - a.weight)
 		.slice(0, 3);
-	const suppressed = dimensionTags
+	const suppressed = dimension_tags
 		.map(tag => ({ tag, weight: getDimensionWeight(tag.key) }))
 		.filter(entry => entry.weight < baseline * 0.85)
 		.sort((a, b) => a.weight - b.weight)
 		.slice(0, 3);
-	if (!boosted.length && !suppressed.length) return `balanced across ${dimensionTags.length} ranked tags`;
+	if (!boosted.length && !suppressed.length) return `balanced across ${dimension_tags.length} ranked tags`;
 	if (boosted.length && suppressed.length) {
 		return `biasing toward ${boosted.map(entry => `${formatDimensionLabel(entry.tag.label)} ${(entry.weight * 100).toFixed(1)}%`).join(" · ")} · hiding ${suppressed.map(entry => `${formatDimensionLabel(entry.tag.label)} ${(entry.weight * 100).toFixed(1)}%`).join(" · ")}`;
 	}
@@ -730,7 +730,7 @@ function recomputeDimensionSelection() {
 	let positive = 0;
 	let negative = 0;
 
-	for (const tag of dimensionTags) {
+	for (const tag of dimension_tags) {
 		const weight = getDimensionWeight(tag.key);
 		const delta = weight - baseline;
 		const boost = delta > 0 ? delta / Math.max(1 - baseline, 0.001) : 0;
@@ -743,7 +743,7 @@ function recomputeDimensionSelection() {
 	}
 
 	const active = Math.max(positive, negative);
-	dimensionSelection = {
+	dimension_selection = {
 		strength: clamp(active * 2.4, 0, 1),
 		boosted: new Set([...deltas.entries()].filter(([, delta]) => delta > baseline * 0.08).map(([key]) => key)),
 		suppressed: new Set([...fades.entries()].filter(([, fade]) => fade > 0.08).map(([key]) => key)),
@@ -855,7 +855,7 @@ function getNodeVisual(n, focus) {
 }
 function getUnfocusedNodeVisual(n) {
 	const baseAlpha = n.kind === "tag" ? 0.92 : 0.72;
-	const sliderPosition = n.dimensionOpacity ?? 0.5;
+	const sliderPosition = n.dimension_opacity ?? 0.5;
 	return { color: n.color, alpha: applySliderOpacity(baseAlpha, sliderPosition), scale: 1 };
 }
 function getEdgeVisual(e, focus) {
@@ -938,7 +938,7 @@ function isSpecialistNode(raw) {
 	return source.startsWith("specialist:") || label.includes("[specialist:");
 }
 function getNodeTypeLabel(node) {
-	return node?.kind === "tag" ? "Shard" : "thought";
+	return node?.kind === "tag" ? "shard" : "thought";
 }
 function getNodeIconGlyph(node) {
 	return node?.kind === "tag" ? "●" : "■";
@@ -955,23 +955,23 @@ function getNodeShapeScale(shape) {
 		default: return 1.0;
 	}
 }
-function getNodeSizeMultiplier(importance) {
+function get_node_size_multiplier(importance) {
 	return 0.55 + 1.05 * clamp(importance || 0, 0, 1);
 }
-function getNodeWorldRadius(n) {
-	const sizeMul = n.sizeMul || getNodeSizeMultiplier(n.importance || 0);
+function get_node_world_radius(n) {
+	const sizeMul = n.sizeMul || get_node_size_multiplier(n.importance || 0);
 	const radius = n.r * sizeMul * 1.9 * getNodeShapeScale(getNodeShape(n));
 	return Math.max(radius, n.kind === "tag" ? 0.08 : 0.03);
 }
 function getNodePrimitiveRadius(n, visualScale = 1) {
-	const sizeMul = n.sizeMul || getNodeSizeMultiplier(n.importance || 0);
+	const sizeMul = n.sizeMul || get_node_size_multiplier(n.importance || 0);
 	const baseRadius = n.kind === "tag" ? 7.2 : 4.1;
 	const radius = baseRadius * sizeMul * getNodeShapeScale(getNodeShape(n));
 	const floor = n.kind === "tag" ? 4.5 : 2.4;
 	return Math.max(radius, floor) * visualScale;
 }
 function getNodeIconMarkup(node) {
-	const kind = node?.kind === "tag" ? "Shard" : "thought";
+	const kind = node?.kind === "tag" ? "shard" : "thought";
 	return `<span class="list-icon list-icon-${kind}" aria-hidden="true">${getNodeIconGlyph(node)}</span>`;
 }
 function getEdgeIconMarkup() {
@@ -1010,7 +1010,7 @@ function hasCameraMotion() {
 	);
 }
 function syncOrbitTarget(snap = false) {
-	const pos = selected?.pos || graphCenter;
+	const pos = selected?.pos || graph_center;
 	setOrbitTarget(pos, snap);
 }
 function rotateIntoCamera(point, center, yawAngle = yaw, pitchAngle = pitch) {
@@ -1028,8 +1028,8 @@ function rotateIntoCamera(point, center, yawAngle = yaw, pitchAngle = pitch) {
 		yawY * sx + yawZ * cx,
 	];
 }
-function getNodeExtent(n) {
-	return getNodeWorldRadius(n) * FRAME_PAD;
+function get_node_extent(n) {
+	return get_node_world_radius(n) * FRAME_PAD;
 }
 function getProjectedBounds(center, distance, yawAngle = yaw, pitchAngle = pitch) {
 	const aspect = Math.max(W / Math.max(H, 1), 0.1);
@@ -1037,8 +1037,8 @@ function getProjectedBounds(center, distance, yawAngle = yaw, pitchAngle = pitch
 	const margin = Math.min(FRAME_MARGIN_PX, Math.min(W, H) * 0.18);
 	const bounds = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity, maxExtent: 0.6, visible: true, margin };
 
-	for (const n of allNodes) {
-		const rr = getNodeExtent(n);
+	for (const n of all_nodes) {
+		const rr = get_node_extent(n);
 		const [rx, ry, rz] = rotateIntoCamera(n.pos, center, yawAngle, pitchAngle);
 		const w = distance - rz;
 		if (w <= 0.001) {
@@ -1071,7 +1071,7 @@ function fitsViewport(center, distance, yawAngle = yaw, pitchAngle = pitch) {
 	return { fits, bounds };
 }
 function fitDistanceForBounds(center, yawAngle = yaw, pitchAngle = pitch) {
-	if (!allNodes.length) return 0.8;
+	if (!all_nodes.length) return 0.8;
 
 	let low = 0.05;
 	let high = 1.0;
@@ -1093,18 +1093,18 @@ function fitDistanceForBounds(center, yawAngle = yaw, pitchAngle = pitch) {
 		else low = mid;
 	}
 
-	graphRadius = Math.max(0.6, lastBounds?.maxExtent || 0.6);
+	graph_radius = Math.max(0.6, lastBounds?.maxExtent || 0.6);
 	return high;
 }
 function updateCameraBounds(resetView = true) {
-	if (!allNodes.length) {
-		graphCenter = [0, 0, 0];
-		graphRadius = POLY_R;
-		minDist = 0.7;
-		baseMinDist = 0.7;
+	if (!all_nodes.length) {
+		graph_center = [0, 0, 0];
+		graph_radius = POLY_R;
+		min_dist = 0.7;
+		base_min_dist = 0.7;
 		maxDist = 6;
-		resetDist = 3;
-		dist = resetView ? resetDist : clamp(dist, minDist, maxDist);
+		reset_dist = 3;
+		dist = resetView ? reset_dist : clamp(dist, min_dist, maxDist);
 		if (resetView) syncOrbitTarget(true);
 		return;
 	}
@@ -1113,8 +1113,8 @@ function updateCameraBounds(resetView = true) {
 	let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
 	let maxNodeR = 0;
 
-	for (const n of allNodes) {
-		const rr = getNodeWorldRadius(n);
+	for (const n of all_nodes) {
+		const rr = get_node_world_radius(n);
 		maxNodeR = Math.max(maxNodeR, rr);
 		minX = Math.min(minX, n.pos[0] - rr);
 		minY = Math.min(minY, n.pos[1] - rr);
@@ -1124,20 +1124,20 @@ function updateCameraBounds(resetView = true) {
 		maxZ = Math.max(maxZ, n.pos[2] + rr);
 	}
 
-	graphCenter = [(minX + maxX) / 2, (minY + maxY) / 2, (minZ + maxZ) / 2];
-	const fitDist = fitDistanceForBounds(graphCenter, yaw, pitch);
-	baseMinDist = Math.max(maxNodeR * 2.0, fitDist * 0.08);
-	minDist = baseMinDist;
-	maxDist = Math.max(minDist * 1.4, fitDist);
-	resetDist = clamp(fitDist * DEFAULT_VIEW, minDist, maxDist);
-	dist = resetView ? resetDist : clamp(dist, minDist, maxDist);
+	graph_center = [(minX + maxX) / 2, (minY + maxY) / 2, (minZ + maxZ) / 2];
+	const fitDist = fitDistanceForBounds(graph_center, yaw, pitch);
+	base_min_dist = Math.max(maxNodeR * 2.0, fitDist * 0.08);
+	min_dist = base_min_dist;
+	maxDist = Math.max(min_dist * 1.4, fitDist);
+	reset_dist = clamp(fitDist * DEFAULT_VIEW, min_dist, maxDist);
+	dist = resetView ? reset_dist : clamp(dist, min_dist, maxDist);
 	if (resetView) syncOrbitTarget(true);
 }
 
-function buildDimensionModel() {
+function build_dimension_model() {
 	const popularity = new Map();
 
-	for (const n of allNodes) {
+	for (const n of all_nodes) {
 		const signals = collectNodeTagSignals(n);
 		const peak = Math.max(...signals.values(), 0, 1);
 		const tagAffinity = {};
@@ -1159,15 +1159,15 @@ function buildDimensionModel() {
 		n.tagSignalMass = Math.max(tagSignalMass, 1);
 	}
 
-	const thoughtsByStore = new Map();
-	for (const n of thoughtNodes) {
+	const thoughts_by_store = new Map();
+	for (const n of thought_nodes) {
 		const key = n.store || "global";
-		if (!thoughtsByStore.has(key)) thoughtsByStore.set(key, []);
-		thoughtsByStore.get(key).push(n);
+		if (!thoughts_by_store.has(key)) thoughts_by_store.set(key, []);
+		thoughts_by_store.get(key).push(n);
 	}
 
-	for (const node of tagNodes) {
-		const bucket = thoughtsByStore.get(node.label) || thoughtsByStore.get(node.store || "") || [];
+	for (const node of tag_nodes) {
+		const bucket = thoughts_by_store.get(node.label) || thoughts_by_store.get(node.store || "") || [];
 		if (!bucket.length) continue;
 
 		const aggregate = new Map();
@@ -1203,37 +1203,37 @@ function buildDimensionModel() {
 		return a.label.localeCompare(b.label);
 	});
 
-	dimensionTags = ranked.slice(0, MAX_DIMENSIONS).map((tag, index) => ({
+	dimension_tags = ranked.slice(0, MAX_DIMENSIONS).map((tag, index) => ({
 		...tag,
 		index,
 		label: formatDimensionLabel(tag.label),
 	}));
 
-	const activeKeys = new Set(dimensionTags.map(tag => tag.key));
-	dimensionWeights = new Map([...dimensionWeights.entries()].filter(([key]) => activeKeys.has(key)));
-	dimensionVectors = new Map();
+	const activeKeys = new Set(dimension_tags.map(tag => tag.key));
+	dimension_weights = new Map([...dimension_weights.entries()].filter(([key]) => activeKeys.has(key)));
+	dimension_vectors = new Map();
 	const baseline = getBaselineDimensionWeight();
-	dimensionTags.forEach((tag, index) => {
-		dimensionVectors.set(tag.key, fibonacciSpherePoint(index, dimensionTags.length));
-		if (!dimensionWeights.has(tag.key)) dimensionWeights.set(tag.key, baseline);
+	dimension_tags.forEach((tag, index) => {
+		dimension_vectors.set(tag.key, fibonacciSpherePoint(index, dimension_tags.length));
+		if (!dimension_weights.has(tag.key)) dimension_weights.set(tag.key, baseline);
 	});
 
-	tagNodes.forEach(node => {
-		const match = dimensionTags.find(tag => tag.label === node.label || tag.key === String(node.label || "").toLowerCase());
+	tag_nodes.forEach(node => {
+		const match = dimension_tags.find(tag => tag.label === node.label || tag.key === String(node.label || "").toLowerCase());
 		node.tagKey = match?.key || "";
 	});
 }
 
-function updateDimensionDrivenState() {
+function update_dimension_driven_state() {
 	recomputeDimensionSelection();
-	for (const n of allNodes) {
+	for (const n of all_nodes) {
 		const ranked = [];
 		let weightedTotal = 0;
 		let affinityTotal = 0;
 		let opacityWeightedSum = 0;
 		let hasOpacityMatch = false;
 
-		for (const tag of dimensionTags) {
+		for (const tag of dimension_tags) {
 			const affinity = n.tagAffinity?.[tag.key] || 0;
 			if (affinity <= 0) continue;
 
@@ -1250,145 +1250,145 @@ function updateDimensionDrivenState() {
 
 		ranked.sort((a, b) => b.score - a.score);
 		n.topDimensions = ranked.slice(0, 3);
-		n.dimensionOpacity = hasOpacityMatch && affinityTotal > 0
+		n.dimension_opacity = hasOpacityMatch && affinityTotal > 0
 			? clamp(opacityWeightedSum / affinityTotal, 0, 1)
 			: 0.5;
 
 		const adjustedImportance = n.baseImportance || 0;
 		n.importance = adjustedImportance;
-		n.sizeMul = getNodeSizeMultiplier(adjustedImportance);
+		n.sizeMul = get_node_size_multiplier(adjustedImportance);
 	}
 
-	const thoughtsByStore = new Map();
-	for (const node of thoughtNodes) {
+	const thoughts_by_store = new Map();
+	for (const node of thought_nodes) {
 		const key = node.store || "global";
-		if (!thoughtsByStore.has(key)) thoughtsByStore.set(key, []);
-		thoughtsByStore.get(key).push(node);
+		if (!thoughts_by_store.has(key)) thoughts_by_store.set(key, []);
+		thoughts_by_store.get(key).push(node);
 	}
 
-	for (const node of tagNodes) {
-		const bucket = thoughtsByStore.get(node.label) || thoughtsByStore.get(node.store || "") || [];
+	for (const node of tag_nodes) {
+		const bucket = thoughts_by_store.get(node.label) || thoughts_by_store.get(node.store || "") || [];
 		if (!bucket.length) continue;
 
 		let strongest = 0;
 		let total = 0;
 		for (const thought of bucket) {
-			const opacity = thought.dimensionOpacity ?? 0.5;
+			const opacity = thought.dimension_opacity ?? 0.5;
 			strongest = Math.max(strongest, opacity);
 			total += opacity;
 		}
 
 		const average = total / bucket.length;
-		node.dimensionOpacity = clamp(strongest * 0.7 + average * 0.3, 0, 1);
+		node.dimension_opacity = clamp(strongest * 0.7 + average * 0.3, 0, 1);
 	}
 }
 
-function applyImportanceLayout(tagPos, angleOf) {
-	const orderedTags = sortNodesForSpiral(tagNodes);
-	const tagSpan = getSpiralHeightSpan() * 0.58;
-	const ShardMinY = -tagSpan * 0.5;
-	const ShardMaxY = tagSpan * 0.5;
-	let minShardY = Infinity;
-	let maxShardY = -Infinity;
+function apply_importance_layout(tagPos, angleOf) {
+	const ordered_tags = sort_nodes_for_spiral(tag_nodes);
+	const tagSpan = get_spiral_height_span() * 0.58;
+	const shard_min_y = -tagSpan * 0.5;
+	const shard_max_y = tagSpan * 0.5;
+	let min_shard_y = Infinity;
+	let max_shard_y = -Infinity;
 
-	for (let i = 0; i < orderedTags.length; i++) {
-		const n = orderedTags[i];
-		const rankT = orderedTags.length <= 1 ? 0.5 : i / (orderedTags.length - 1);
-		const angleT = orderedTags.length <= 1 ? 0.5 : i / orderedTags.length;
-		const angle = -Math.PI * 0.5 + angleT * Math.PI * 2;
-		const sphereScale = getSpiralSphereScale(rankT);
-		const ShardRadius = Shard_RING_RADIUS * sphereScale;
+	for (let i = 0; i < ordered_tags.length; i++) {
+		const n = ordered_tags[i];
+		const rank_t = ordered_tags.length <= 1 ? 0.5 : i / (ordered_tags.length - 1);
+		const angle_t = ordered_tags.length <= 1 ? 0.5 : i / ordered_tags.length;
+		const angle = -Math.PI * 0.5 + angle_t * Math.PI * 2;
+		const sphere_scale = get_spiral_sphere_scale(rank_t);
+		const shard_radius = SHARD_RING_RADIUS * sphere_scale;
 		const basePos = [
-			ShardRadius * Math.cos(angle),
-			(rankT - 0.5) * tagSpan,
-			ShardRadius * Math.sin(angle),
+			shard_radius * Math.cos(angle),
+			(rank_t - 0.5) * tagSpan,
+			shard_radius * Math.sin(angle),
 		];
-		n.pos = scalePositionFromCenter(twistPositionByHeight(basePos, ShardMinY, ShardMaxY));
+		n.pos = scalePositionFromCenter(twistPositionByHeight(basePos, shard_min_y, shard_max_y));
 		tagPos[n.label] = basePos;
 		angleOf[n.label] = angle;
-		minShardY = Math.min(minShardY, basePos[1]);
-		maxShardY = Math.max(maxShardY, basePos[1]);
+		min_shard_y = Math.min(min_shard_y, basePos[1]);
+		max_shard_y = Math.max(max_shard_y, basePos[1]);
 	}
 
-	if (!Number.isFinite(minShardY) || !Number.isFinite(maxShardY)) {
-		minShardY = -tagSpan * 0.5;
-		maxShardY = tagSpan * 0.5;
+	if (!Number.isFinite(min_shard_y) || !Number.isFinite(max_shard_y)) {
+		min_shard_y = -tagSpan * 0.5;
+		max_shard_y = tagSpan * 0.5;
 	}
 
-	if (!thoughtNodes.length) return;
+	if (!thought_nodes.length) return;
 
-	const storeBuckets = {};
-	const storeBounds = {};
-	const pendingThoughtPositions = [];
-	for (const n of thoughtNodes) {
+	const store_buckets = {};
+	const store_bounds = {};
+	const pending_thought_positions = [];
+	for (const n of thought_nodes) {
 		const key = n.store || "global";
-		(storeBuckets[key] ||= []).push(n);
+		(store_buckets[key] ||= []).push(n);
 		const vec = n.embedPos || [0, 0, 0];
-		const bound = (storeBounds[key] ||= [1e-6, 1e-6, 1e-6]);
+		const bound = (store_bounds[key] ||= [1e-6, 1e-6, 1e-6]);
 		bound[0] = Math.max(bound[0], Math.abs(vec[0] || 0));
 		bound[1] = Math.max(bound[1], Math.abs(vec[1] || 0));
 		bound[2] = Math.max(bound[2], Math.abs(vec[2] || 0));
 	}
 
-	const spiralSpan = getSpiralHeightSpan();
-	for (const [storeKey, bucket] of Object.entries(storeBuckets)) {
+	const spiralSpan = get_spiral_height_span();
+	for (const [storeKey, bucket] of Object.entries(store_buckets)) {
 		const isGlobal = storeKey === "global";
-		const ordered = sortNodesForSpiral(bucket);
+		const ordered = sort_nodes_for_spiral(bucket);
 		const anchorAngle = isGlobal ? -Math.PI * 0.5 : (angleOf[storeKey] ?? 0);
 		const tagAnchor = isGlobal ? [0, 0, 0] : (tagPos[storeKey] || [0, 0, 0]);
 		const center = isGlobal
 			? [0, 0, 0]
-			: [tagAnchor[0] * Shard_INNER_PULL, tagAnchor[1] * 0.82, tagAnchor[2] * Shard_INNER_PULL];
+			: [tagAnchor[0] * SHARD_INNER_PULL, tagAnchor[1] * 0.82, tagAnchor[2] * SHARD_INNER_PULL];
 		const radialDir = [Math.cos(anchorAngle), 0, Math.sin(anchorAngle)];
 		const tangentDir = [-radialDir[2], 0, radialDir[0]];
 		const radius = isGlobal ? GLOBAL_SPIRAL_RADIUS : THOUGHT_SPIRAL_RADIUS;
-		const bounds = storeBounds[storeKey] || [1, 1, 1];
+		const bounds = store_bounds[storeKey] || [1, 1, 1];
 
 		for (let i = 0; i < ordered.length; i++) {
 			const n = ordered[i];
-			const rankT = ordered.length <= 1 ? 0.5 : i / (ordered.length - 1);
-			const sphereScale = getSpiralSphereScale(rankT);
+			const rank_t = ordered.length <= 1 ? 0.5 : i / (ordered.length - 1);
+			const sphere_scale = get_spiral_sphere_scale(rank_t);
 			const raw = n.embedPos || [0, 0, 0];
 			const vx = clamp((raw[0] || 0) / bounds[0], -1.15, 1.15);
 			const vz = clamp((raw[2] || 0) / bounds[2], -1.15, 1.15);
-			const lateral = vx * radius * sphereScale;
-			const depth = vz * radius * (isGlobal ? 0.42 : 0.55) * sphereScale;
-			const taperedCenter = [center[0] * sphereScale, center[1], center[2] * sphereScale];
+			const lateral = vx * radius * sphere_scale;
+			const depth = vz * radius * (isGlobal ? 0.42 : 0.55) * sphere_scale;
+			const taperedCenter = [center[0] * sphere_scale, center[1], center[2] * sphere_scale];
 
 			const basePos = [
 				taperedCenter[0] + tangentDir[0] * lateral + radialDir[0] * depth,
-				center[1] + (rankT - 0.5) * spiralSpan,
+				center[1] + (rank_t - 0.5) * spiralSpan,
 				taperedCenter[2] + tangentDir[2] * lateral + radialDir[2] * depth,
 			];
 
-			pendingThoughtPositions.push({ node: n, basePos });
+			pending_thought_positions.push({ node: n, basePos });
 		}
 	}
 
 	let rawThoughtMinY = Infinity;
 	let rawThoughtMaxY = -Infinity;
-	for (const entry of pendingThoughtPositions) {
+	for (const entry of pending_thought_positions) {
 		rawThoughtMinY = Math.min(rawThoughtMinY, entry.basePos[1]);
 		rawThoughtMaxY = Math.max(rawThoughtMaxY, entry.basePos[1]);
 	}
 
-	const ShardMidY = (minShardY + maxShardY) * 0.5;
+	const shard_mid_y = (min_shard_y + max_shard_y) * 0.5;
 	const thoughtMidY = Number.isFinite(rawThoughtMinY) && Number.isFinite(rawThoughtMaxY)
 		? (rawThoughtMinY + rawThoughtMaxY) * 0.5
-		: ShardMidY;
+		: shard_mid_y;
 
-	for (const entry of pendingThoughtPositions) {
+	for (const entry of pending_thought_positions) {
 		const normalizedY = rawThoughtMaxY - rawThoughtMinY > 1e-6
-			? lerp(minShardY, maxShardY, invLerp(rawThoughtMinY, rawThoughtMaxY, entry.basePos[1]))
-			: ShardMidY;
+			? lerp(min_shard_y, max_shard_y, invLerp(rawThoughtMinY, rawThoughtMaxY, entry.basePos[1]))
+			: shard_mid_y;
 		entry.basePos[1] = normalizedY;
-		entry.node.pos = scalePositionFromCenter(twistPositionByHeight(entry.basePos, minShardY, maxShardY));
+		entry.node.pos = scalePositionFromCenter(twistPositionByHeight(entry.basePos, min_shard_y, max_shard_y));
 	}
 }
 
-function syncSpiralControls() {
+function sync_spiral_controls() {
 	const heightInput = document.getElementById("spiral-height-slider");
-	if (heightInput) heightInput.value = getSpiralHeightSpan().toFixed(1);
+	if (heightInput) heightInput.value = get_spiral_height_span().toFixed(1);
 	const heightMeta = document.getElementById("spiral-height-meta");
 	if (heightMeta) heightMeta.textContent = getSpiralHeightLabel();
 
@@ -1397,8 +1397,8 @@ function syncSpiralControls() {
 	const spreadMeta = document.getElementById("spiral-spread-meta");
 	if (spreadMeta) spreadMeta.textContent = getSpiralSpreadLabel();
 
-	const edgeInput = document.getElementById("edge-opacity-slider");
-	if (edgeInput) edgeInput.value = getEdgeOpacityScale().toFixed(2);
+	const edge_input = document.getElementById("edge-opacity-slider");
+	if (edge_input) edge_input.value = getEdgeOpacityScale().toFixed(2);
 	const edgeMeta = document.getElementById("edge-opacity-meta");
 	if (edgeMeta) edgeMeta.textContent = getEdgeOpacityLabel();
 }
@@ -1407,9 +1407,9 @@ function syncDimensionControls() {
 	const summaryEl = document.getElementById("dimension-summary");
 	if (summaryEl) summaryEl.textContent = describeDimensionState();
 	const countEl = document.getElementById("s-dimensions");
-	if (countEl) countEl.textContent = dimensionTags.length;
+	if (countEl) countEl.textContent = dimension_tags.length;
 
-	for (const tag of dimensionTags) {
+	for (const tag of dimension_tags) {
 		const controls = dimensionControlEls.get(tag.key);
 		if (!controls) continue;
 		const weight = getDimensionWeight(tag.key);
@@ -1419,48 +1419,48 @@ function syncDimensionControls() {
 	}
 }
 
-function relayoutScene({ resetView = false, recomputeMesh = false } = {}) {
-	updateDimensionDrivenState();
+function relayout_scene({ resetView = false, recomputeMesh = false } = {}) {
+	update_dimension_driven_state();
 	if (recomputeMesh) {
-		applyImportanceLayout(layoutState.tagPos, layoutState.angleOf);
+		apply_importance_layout(layout_state.tagPos, layout_state.angleOf);
 		updateCameraBounds(resetView);
 		if (selected) setOrbitTarget(selected.pos, resetView);
-		else setOrbitTarget(graphCenter, resetView);
+		else setOrbitTarget(graph_center, resetView);
 	}
-	refreshSceneBuffers();
+	refresh_scene_buffers();
 	if (selected) showDetail(selected);
-	syncSpiralControls();
+	sync_spiral_controls();
 	syncDimensionControls();
 }
 
 function rebalanceDimension(tagKey, nextWeight) {
-	if (!dimensionTags.length || !dimensionWeights.has(tagKey)) return;
+	if (!dimension_tags.length || !dimension_weights.has(tagKey)) return;
 
 	const clampedWeight = clamp(nextWeight, 0, 1);
 	const oldWeight = getDimensionWeight(tagKey);
-	const others = dimensionTags.filter(tag => tag.key !== tagKey);
+	const others = dimension_tags.filter(tag => tag.key !== tagKey);
 	const oldOtherTotal = others.reduce((sum, tag) => sum + getDimensionWeight(tag.key), 0);
 	const remaining = Math.max(0, 1 - clampedWeight);
 
-	dimensionWeights.set(tagKey, clampedWeight);
+	dimension_weights.set(tagKey, clampedWeight);
 	if (others.length) {
 		if (oldOtherTotal <= 1e-6) {
 			const shared = remaining / others.length;
-			for (const tag of others) dimensionWeights.set(tag.key, shared);
+			for (const tag of others) dimension_weights.set(tag.key, shared);
 		} else {
 			const scale = remaining / oldOtherTotal;
-			for (const tag of others) dimensionWeights.set(tag.key, getDimensionWeight(tag.key) * scale);
+			for (const tag of others) dimension_weights.set(tag.key, getDimensionWeight(tag.key) * scale);
 		}
 	}
 
-	if (Math.abs(oldWeight - clampedWeight) > 1e-6) relayoutScene({ resetView: false, recomputeMesh: false });
+	if (Math.abs(oldWeight - clampedWeight) > 1e-6) relayout_scene({ resetView: false, recomputeMesh: false });
 }
 
 function resetDimensionWeights() {
-	if (!dimensionTags.length) return;
+	if (!dimension_tags.length) return;
 	const baseline = getBaselineDimensionWeight();
-	for (const tag of dimensionTags) dimensionWeights.set(tag.key, baseline);
-	relayoutScene({ resetView: false, recomputeMesh: false });
+	for (const tag of dimension_tags) dimension_weights.set(tag.key, baseline);
+	relayout_scene({ resetView: false, recomputeMesh: false });
 }
 
 function renderDimensionControls() {
@@ -1470,7 +1470,7 @@ function renderDimensionControls() {
 	root.innerHTML = "";
 	dimensionControlEls = new Map();
 
-	if (!dimensionTags.length) {
+	if (!dimension_tags.length) {
 		const empty = document.createElement("div");
 		empty.className = "dimension-empty";
 		empty.textContent = "No stable graph tags yet. Add more varied thoughts and sources to unlock dimension balancing.";
@@ -1479,7 +1479,7 @@ function renderDimensionControls() {
 		return;
 	}
 
-	for (const tag of dimensionTags) {
+	for (const tag of dimension_tags) {
 		const row = document.createElement("div");
 		row.className = "dimension-row";
 
@@ -1517,11 +1517,11 @@ function renderDimensionControls() {
 function setupSpiralControls() {
 	const heightInput = document.getElementById("spiral-height-slider");
 	if (heightInput) {
-		heightInput.value = getSpiralHeightSpan().toFixed(1);
+		heightInput.value = get_spiral_height_span().toFixed(1);
 		heightInput.addEventListener("input", () => {
-			spiralHeightScale = clamp(Number(heightInput.value), 0, SPIRAL_HEIGHT_MAX);
-			writeStoredVizSettings();
-			relayoutScene({ resetView: false, recomputeMesh: true });
+			spiral_height_scale = clamp(Number(heightInput.value), 0, SPIRAL_HEIGHT_MAX);
+			write_stored_viz_settings();
+			relayout_scene({ resetView: false, recomputeMesh: true });
 		});
 	}
 
@@ -1529,25 +1529,25 @@ function setupSpiralControls() {
 	if (spreadInput) {
 		spreadInput.value = getSpiralSpreadScale().toFixed(2);
 		spreadInput.addEventListener("input", () => {
-			spiralSpreadScale = clamp(Number(spreadInput.value), -1, 1);
-			writeStoredVizSettings();
-			relayoutScene({ resetView: false, recomputeMesh: true });
+			spiral_spread_scale = clamp(Number(spreadInput.value), -1, 1);
+			write_stored_viz_settings();
+			relayout_scene({ resetView: false, recomputeMesh: true });
 		});
 	}
 
-	const edgeInput = document.getElementById("edge-opacity-slider");
-	if (edgeInput) {
-		edgeInput.value = getEdgeOpacityScale().toFixed(2);
-		edgeInput.addEventListener("input", () => {
-			edgeOpacityScale = clamp(Number(edgeInput.value), 0, 1);
-			writeStoredVizSettings();
-			syncSpiralControls();
-			refreshSceneBuffers();
+	const edge_input = document.getElementById("edge-opacity-slider");
+	if (edge_input) {
+		edge_input.value = getEdgeOpacityScale().toFixed(2);
+		edge_input.addEventListener("input", () => {
+			edge_opacity_scale = clamp(Number(edge_input.value), 0, 1);
+			write_stored_viz_settings();
+			sync_spiral_controls();
+			refresh_scene_buffers();
 		});
 	}
 
-	if (!heightInput && !spreadInput && !radiusInput && !edgeInput) return;
-	syncSpiralControls();
+	if (!heightInput && !spreadInput && !radiusInput && !edge_input) return;
+	sync_spiral_controls();
 }
 
 function setupThemeControls() {
@@ -1626,8 +1626,8 @@ function setupRecencyColorControls() {
 
 	function applyRecencyChange() {
 		recolorNodesForTheme();
-		writeStoredVizSettings();
-		refreshSceneBuffers();
+		write_stored_viz_settings();
+		refresh_scene_buffers();
 	}
 
 	render();
@@ -1636,28 +1636,28 @@ function setupRecencyColorControls() {
 
 // ---- 3D layout ----
 function layout(data) {
-	allNodes = []; tagNodes = []; thoughtNodes = []; edges = [];
-	nodeIdx = {}; nbrs = {}; edgeAdj = {}; storeClr = {}; clrI = 0;
+	all_nodes = []; tag_nodes = []; thought_nodes = []; edges = [];
+	node_idx = {}; nbrs = {}; edgeAdj = {}; store_clr = {}; clrI = 0;
 
-	const Shards = [...data.nodes.filter(n => n.type === "Shard")]
+	const shards = [...data.nodes.filter(n => n.type === "shard")]
 		.sort((a, b) => String(a.label || a.key).localeCompare(String(b.label || b.key)));
-	const rest = [...data.nodes.filter(n => n.type !== "Shard")]
+	const rest = [...data.nodes.filter(n => n.type !== "shard")]
 		.sort((a, b) => String(a.key).localeCompare(String(b.key)));
-	const N = Shards.length, angleOf = {}, tagPos = {};
-	layoutState = { tagPos, angleOf };
+	const N = shards.length, angleOf = {}, tagPos = {};
+	layout_state = { tagPos, angleOf };
 	const now = Date.now() / 1000;
 
-	Shards.forEach((s, i) => {
+	shards.forEach((s, i) => {
 		const a = (2 * Math.PI * i) / Math.max(N, 1);
 		angleOf[s.label] = a;
-		tagPos[s.label] = [Shard_RING_RADIUS * Math.cos(a), 0, Shard_RING_RADIUS * Math.sin(a)];
+		tagPos[s.label] = [SHARD_RING_RADIUS * Math.cos(a), 0, SHARD_RING_RADIUS * Math.sin(a)];
 		const col = sClr(s.label);
 		const nd = {
 			key: s.key, pos: [...tagPos[s.label]], r: 0.12, color: col, paletteKey: s.label,
 			label: s.label, kind: "tag", shape: "circle", store: s.store, source: s.source || "",
 			access: s.access_count || 0, created: s.created_at || 0, lastAccess: s.last_accessed || 0
 		};
-		allNodes.push(nd); tagNodes.push(nd); nodeIdx[nd.key] = nd;
+		all_nodes.push(nd); tag_nodes.push(nd); node_idx[nd.key] = nd;
 	});
 
 	const sw = N > 0 ? (2 * Math.PI) / N : 2 * Math.PI;
@@ -1688,12 +1688,12 @@ function layout(data) {
 				source: t.source || "", access: t.access_count || 0, created: t.created_at || 0, lastAccess: t.last_accessed || 0,
 				embedPos: Array.isArray(t.embed_pos) ? t.embed_pos : null
 			};
-			allNodes.push(nd); thoughtNodes.push(nd); nodeIdx[nd.key] = nd;
+			all_nodes.push(nd); thought_nodes.push(nd); node_idx[nd.key] = nd;
 		}
 	}
 
 	for (const e of data.edges) {
-		const s = nodeIdx[e.source], t = nodeIdx[e.target];
+		const s = node_idx[e.source], t = node_idx[e.target];
 		if (s && t) edges.push({
 			s, t,
 			w: e.weight,
@@ -1706,7 +1706,7 @@ function layout(data) {
 		});
 	}
 	if (data.knn_edges) for (const e of data.knn_edges) {
-		const s = nodeIdx[e.source], t = nodeIdx[e.target];
+		const s = node_idx[e.source], t = node_idx[e.target];
 		if (s && t) edges.push({
 			s, t,
 			w: e.weight,
@@ -1729,7 +1729,7 @@ function layout(data) {
 		e.recency = eStamp > 0 ? 1 / (1 + Math.max(0, now - eStamp) / (3600 * 24 * 14)) : 0;
 	}
 
-	for (const n of allNodes) {
+	for (const n of all_nodes) {
 		let strength = 0, successSum = 0, traversalSum = 0, seen = 0;
 		for (const e of edges) {
 			if (e.s !== n && e.t !== n) continue;
@@ -1751,7 +1751,7 @@ function layout(data) {
 		maxTraversal = Math.max(maxTraversal, traversalSum);
 	}
 
-	for (const n of allNodes) {
+	for (const n of all_nodes) {
 		const accessScore = softScore(n.access || 0, maxAccess);
 		const linkScore = softScore(n.linkCount || 0, maxLinks);
 		const strengthScore = softScore(n.linkStrength || 0, maxStrength);
@@ -1763,12 +1763,12 @@ function layout(data) {
 			: clamp(0.28 * accessScore + 0.18 * linkScore + 0.24 * strengthScore + 0.12 * successScore + 0.10 * traversalScore + 0.08 * recencyScore, 0, 1);
 		n.baseImportance = importance;
 		n.importance = importance;
-		n.sizeMul = getNodeSizeMultiplier(importance);
+		n.sizeMul = get_node_size_multiplier(importance);
 	}
 
-	buildDimensionModel();
+	build_dimension_model();
 	renderDimensionControls();
-	relayoutScene({ resetView: true, recomputeMesh: true });
+	relayout_scene({ resetView: true, recomputeMesh: true });
 }
 
 // ---- WebGPU init ----
@@ -2063,7 +2063,7 @@ function buildBufs(dev) {
 	const cubeInstances = [];
 	const triangleInstances = [];
 
-	for (const n of allNodes) {
+	for (const n of all_nodes) {
 		const vis = focus ? getNodeVisual(n, focus) : getUnfocusedNodeVisual(n);
 		const scaleBase = getNodePrimitiveRadius(n, vis.scale);
 		const shape = getNodeShape(n);
@@ -2123,7 +2123,7 @@ function buildBufs(dev) {
 }
 
 let dev, fmt, gc, geom, circleMaskP, boxMaskP, triangleMaskP, circleFillP, boxFillP, triangleFillP, circleP, boxP, triangleP, edgeP, markerFillP, markerP, ub, bg, bufs;
-function refreshSceneBuffers() {
+function refresh_scene_buffers() {
 	if (!dev) return;
 	if (bufs) {
 		bufs.circleBuffer?.destroy?.();
@@ -2306,7 +2306,7 @@ function projectAll(mvp) {
 	let dMin = Infinity, dMax = -Infinity;
 	const focus = getFocusState();
 	const rawProjected = [];
-	for (const n of allNodes) {
+	for (const n of all_nodes) {
 		const [x, y, z] = n.pos;
 		const cx = mvp[0] * x + mvp[4] * y + mvp[8] * z + mvp[12];
 		const cy = mvp[1] * x + mvp[5] * y + mvp[9] * z + mvp[13];
@@ -2500,11 +2500,11 @@ function isTextEditingTarget(target) {
 	return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target.isContentEditable;
 }
 
-function rankThoughtMatches(query) {
+function rank_thoughtMatches(query) {
 	const q = query.toLowerCase().trim();
 	if (q.length < 2) return [];
 
-	return thoughtNodes
+	return thought_nodes
 		.map(node => {
 			const label = String(node.label || "").toLowerCase();
 			const source = String(node.source || "").toLowerCase();
@@ -2598,7 +2598,7 @@ function setupAskUI() {
 
 	const renderThoughtMatches = (query) => {
 		thoughtsList.innerHTML = "";
-		const matches = rankThoughtMatches(query);
+		const matches = rank_thoughtMatches(query);
 		thoughts.hidden = !matches.length;
 		for (const node of matches) {
 			const card = document.createElement("div");
@@ -2721,7 +2721,7 @@ function setupAskUI() {
 function setupInput() {
 	cvs.addEventListener("wheel", e => {
 		e.preventDefault();
-		dist = clamp(dist * (e.deltaY > 0 ? ZOOM_OUT : ZOOM_IN), minDist, maxDist);
+		dist = clamp(dist * (e.deltaY > 0 ? ZOOM_OUT : ZOOM_IN), min_dist, maxDist);
 		requestRender();
 	}, { passive: false });
 
@@ -2790,7 +2790,7 @@ function setupInput() {
 		selectNode(null);
 		yaw = 0.3;
 		pitch = -0.5;
-		dist = resetDist;
+		dist = reset_dist;
 		vYaw = 0.002;
 		vPitch = 0;
 		syncOrbitTarget(true);
@@ -2801,7 +2801,7 @@ function setupInput() {
 // ---- detail ----
 function selectNode(n, { align = false } = {}) {
 	selected = n;
-	refreshSceneBuffers();
+	refresh_scene_buffers();
 	if (!n) {
 		syncOrbitTarget();
 		document.getElementById("detail").style.display = "none";
@@ -2809,9 +2809,9 @@ function selectNode(n, { align = false } = {}) {
 	}
 
 	if (align) {
-		const dx = n.pos[0] - graphCenter[0];
-		const dy = n.pos[1] - graphCenter[1];
-		const dz = n.pos[2] - graphCenter[2];
+		const dx = n.pos[0] - graph_center[0];
+		const dy = n.pos[1] - graph_center[1];
+		const dz = n.pos[2] - graph_center[2];
 		yaw = Math.atan2(dx, dz);
 		pitch = clamp(-Math.atan2(dy, Math.max(Math.hypot(dx, dz), 0.001)), -Math.PI / 2 + 0.05, Math.PI / 2 - 0.05);
 	}
@@ -2829,7 +2829,7 @@ function showDetail(n) {
 		? ` &middot; tags: ${n.topDimensions.map(dim => `${dim.label} ${dim.score.toFixed(2)}`).join(", ")}`
 		: "";
 	document.getElementById("d-meta").innerHTML = n.kind === "tag"
-		? `Shard &middot; importance: ${(n.importance || 0).toFixed(2)} &middot; links: ${n.linkCount || 0}${dimText}`
+		? `shard &middot; importance: ${(n.importance || 0).toFixed(2)} &middot; links: ${n.linkCount || 0}${dimText}`
 		: `store: ${n.store} &middot; source: ${n.source || "\u2014"} &middot; access: ${n.access} &middot; importance: ${(n.importance || 0).toFixed(2)}${dimText}`;
 	document.getElementById("d-text").textContent = n.label;
 	const el = document.getElementById("d-edge-list"); el.innerHTML = "";
@@ -2903,7 +2903,7 @@ applyTheme(currentTheme.id, { persist: false, recolorNodes: false, refresh: fals
 const data = await(await fetch("/graph/full")).json();
 document.getElementById("loading").remove();
 layout(data);
-document.getElementById("s-nodes").textContent = thoughtNodes.length;
+document.getElementById("s-nodes").textContent = thought_nodes.length;
 document.getElementById("s-edges").textContent = edges.length;
 setupSpiralControls();
 setupThemeControls();
@@ -2911,7 +2911,7 @@ setupRecencyColorControls();
 setupPanelSettings();
 
 // ---- live poll for updates ----
-let lastThoughtCount = data.nodes.filter(n => n.type !== "Shard").length;
+let lastThoughtCount = data.nodes.filter(n => n.type !== "shard").length;
 let pollInterval = null;
 
 async function pollForUpdates() {
@@ -2922,7 +2922,7 @@ async function pollForUpdates() {
 			// Refetch full graph to get new nodes + edges
 			const newData = await (await fetch("/graph/full")).json();
 			layout(newData);
-			document.getElementById("s-nodes").textContent = thoughtNodes.length;
+			document.getElementById("s-nodes").textContent = thought_nodes.length;
 			document.getElementById("s-edges").textContent = edges.length;
 			lastThoughtCount = diff.thought_count;
 		} else if (diff.initial) {
@@ -2980,7 +2980,7 @@ function frame(time) {
 
 	// MVP — orbit camera: rotate world then pull back
 	const asp = W / H;
-	const far = Math.max(40, dist + graphRadius * 6);
+	const far = Math.max(40, dist + graph_radius * 6);
 	const proj = m4Persp(FOV, asp, 0.05, far);
 	const view = m4Mul(
 		m4Mul(
@@ -2990,7 +2990,7 @@ function frame(time) {
 		m4Trans(-orbitCenter[0], -orbitCenter[1], -orbitCenter[2])
 	);
 
-	dist = clamp(dist, minDist, maxDist);
+	dist = clamp(dist, min_dist, maxDist);
 	const mvp = m4Mul(proj, view);
 	mvpCache = mvp;
 	projectAll(mvp);

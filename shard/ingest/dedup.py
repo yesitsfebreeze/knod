@@ -1,7 +1,7 @@
 import logging
 
 from ..config import Config
-from ..Shard.graph import Graph
+from ..shard.graph import Graph
 from ..util.math import normalize
 from .prepare import PreparedArticle
 

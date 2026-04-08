@@ -10,7 +10,7 @@
 
 Section tags:
   0x01 GRAPH    — pickled graph state dict
-  0x02 MODEL    — torch.save bytes (model + Shard state_dict)
+  0x02 MODEL    — torch.save bytes (model + shard state_dict)
   0x03 LIMBO    — pickled limbo list
   0x04 REGISTRY — pickled registry nodes dict
 """
@@ -38,7 +38,7 @@ SECTION_MODEL = 0x02
 SECTION_LIMBO = 0x03
 SECTION_REGISTRY = 0x04
 
-# ---- Per-Shard model checkpoints (.pt) ----
+# ---- Per-shard model checkpoints (.pt) ----
 
 
 # --- Graph serialisation helpers ---
@@ -85,24 +85,24 @@ def graph_from_state(state: dict, *, maturity_divisor: int = 50) -> Graph:
 	return graph
 
 
-def save_model(model: ShardMPNN, Shard: ShardLayer, path: str | Path):
-	"""Save model + Shard checkpoint (per-Shard .pt file)."""
+def save_model(model: ShardMPNN, shard: ShardLayer, path: str | Path):
+	"""Save model + shard checkpoint (per-shard .pt file)."""
 	path = Path(path)
 	path.parent.mkdir(parents=True, exist_ok=True)
 	torch.save(
 		{
 			"model": model.state_dict(),
-			"Shard": Shard.state_dict(),
+			"shard": shard.state_dict(),
 		},
 		path,
 	)
 
 
-def load_model(model: ShardMPNN, Shard: ShardLayer, path: str | Path):
-	"""Load model + Shard checkpoint."""
+def load_model(model: ShardMPNN, shard: ShardLayer, path: str | Path):
+	"""Load model + shard checkpoint."""
 	checkpoint = torch.load(path, weights_only=True)
 	model.load_state_dict(checkpoint["model"])
-	Shard.load_state_dict(checkpoint["Shard"])
+	shard.load_state_dict(checkpoint["shard"])
 
 
 # ---- Shared base GNN checkpoint ----
@@ -114,11 +114,11 @@ def _get_base_gnn_path(cfg) -> Path:
 	return Path(cfg.base_gnn_path) if cfg.base_gnn_path else _DEFAULT_BASE_GNN_PATH
 
 
-def extract_routing_from_Shard(graph, model, Shard) -> dict:
-	"""Extract routing knowledge from a trained Shard.
+def extract_routing_from_shard(graph, model, shard) -> dict:
+	"""Extract routing knowledge from a trained shard.
 
 	Returns a dict with:
-	- Shard_profiles: list of (profile_embedding, Shard_name)
+	- shard_profiles: list of (profile_embedding, shard_name)
 	- high_weight_edges: list of (source_profile, target_profile, weight)
 	- node_hidden_avg: average hidden representation from the GNN
 	"""
@@ -140,16 +140,16 @@ def extract_routing_from_Shard(graph, model, Shard) -> dict:
 		e = F.relu(model.edge_proj(edge_features))
 		for layer in model.layers:
 			h = layer(h, edge_index, e)
-		h_Shard, _ = Shard(h, edge_index)
+		h_shard, _ = shard(h, edge_index)
 
 	routing = {
-		"Shard_profiles": [],
+		"shard_profiles": [],
 		"high_weight_edges": [],
-		"node_hidden_avg": h_Shard.mean(dim=0).cpu().numpy().tolist(),
+		"node_hidden_avg": h_shard.mean(dim=0).cpu().numpy().tolist(),
 	}
 
 	if graph.profile is not None:
-		routing["Shard_profiles"].append((graph.profile.tolist(), graph.name or "unknown"))
+		routing["shard_profiles"].append((graph.profile.tolist(), graph.name or "unknown"))
 
 	for e in graph.edges:
 		if e.weight >= 0.7:
@@ -162,9 +162,9 @@ def extract_routing_from_Shard(graph, model, Shard) -> dict:
 
 
 def merge_routing_into_base(model, routing: dict):
-	"""Merge Shard routing knowledge into the base model.
+	"""Merge shard routing knowledge into the base model.
 
-	Adds synthetic routing nodes to the base that encode Shard profiles
+	Adds synthetic routing nodes to the base that encode shard profiles
 	and high-weight edge patterns. This helps the base learn navigation.
 	"""
 	import torch
@@ -173,13 +173,13 @@ def merge_routing_into_base(model, routing: dict):
 	if not routing:
 		return
 
-	if "Shard_profiles" in routing and "node_hidden_avg" in routing:
+	if "shard_profiles" in routing and "node_hidden_avg" in routing:
 		avg_hidden = torch.tensor(routing["node_hidden_avg"], dtype=torch.float)
 		hidden_dim = model.hidden_dim
 		embed_dim = model.embedding_dim
 
 		with torch.no_grad():
-			for profile, name in routing["Shard_profiles"]:
+			for profile, name in routing["shard_profiles"]:
 				profile_tensor = torch.tensor(profile, dtype=torch.float)
 				if profile_tensor.shape[0] != embed_dim:
 					continue
@@ -222,16 +222,16 @@ def load_base_model(model: ShardMPNN, cfg=None) -> bool:
 	return True
 
 
-def save_all(graph: Graph, model: ShardMPNN, Shard: ShardLayer, base_path: str | Path):
+def save_all(graph: Graph, model: ShardMPNN, shard: ShardLayer, base_path: str | Path):
 	"""Save everything to a single base_path.shard file. Also updates shared base."""
 	base = Path(base_path)
-	save_shard(graph, model, Shard, base.with_suffix(".shard"))
+	save_shard(graph, model, shard, base.with_suffix(".shard"))
 	# Update the shared base model
 	save_base_model(model)
 
 
 def load_all(cfg, base_path: str | Path) -> tuple[Graph, ShardMPNN, ShardLayer]:
-	"""Load graph, model, and Shard from base_path.shard."""
+	"""Load graph, model, and shard from base_path.shard."""
 	base = Path(base_path)
 	shard_path = base.with_suffix(".shard")
 
@@ -282,14 +282,14 @@ def _parse_shard_sections(data: bytes) -> list[tuple[int, bytes]]:
 	return sections
 
 
-def _model_bytes(model: ShardMPNN, Shard: ShardLayer) -> bytes:
-	"""Serialize model + Shard state_dict to bytes via torch.save."""
+def _model_bytes(model: ShardMPNN, shard: ShardLayer) -> bytes:
+	"""Serialize model + shard state_dict to bytes via torch.save."""
 	buf = io.BytesIO()
-	torch.save({"model": model.state_dict(), "Shard": Shard.state_dict()}, buf)
+	torch.save({"model": model.state_dict(), "shard": shard.state_dict()}, buf)
 	return buf.getvalue()
 
 
-def save_shard(graph: Graph, model: ShardMPNN, Shard: ShardLayer, path: str | Path):
+def save_shard(graph: Graph, model: ShardMPNN, shard: ShardLayer, path: str | Path):
 	"""Save graph + model + limbo + registry into a single .shard file."""
 	path = Path(path)
 	path.parent.mkdir(parents=True, exist_ok=True)
@@ -303,7 +303,7 @@ def save_shard(graph: Graph, model: ShardMPNN, Shard: ShardLayer, path: str | Pa
 		_write_section(f, SECTION_GRAPH, pickle.dumps(graph_to_state(graph)))
 
 		# MODEL section
-		_write_section(f, SECTION_MODEL, _model_bytes(model, Shard))
+		_write_section(f, SECTION_MODEL, _model_bytes(model, shard))
 
 		# LIMBO section (only if non-empty)
 		if graph.limbo:
@@ -322,7 +322,7 @@ def load_shard(cfg, path: str | Path, warm_start: bool = True) -> tuple[Graph, S
 		cfg: Config object
 		path: Path to .shard file
 		warm_start: If True, first load base model weights, then override with
-		            Shard-specific weights. This gives Shards cross-Shard navigation
+		            shard-specific weights. This gives shards cross-shard navigation
 		            knowledge from the shared base.
 	"""
 	path = Path(path)
@@ -363,9 +363,9 @@ def load_shard(cfg, path: str | Path, warm_start: bool = True) -> tuple[Graph, S
 
 	# Reconstruct model
 	model = ShardMPNN(cfg)
-	Shard = ShardLayer(cfg.hidden_dim)
+	shard = ShardLayer(cfg.hidden_dim)
 
-	# Warm start: load base model first for cross-Shard navigation knowledge
+	# Warm start: load base model first for cross-shard navigation knowledge
 	if warm_start:
 		load_base_model(model, cfg)
 
@@ -373,11 +373,11 @@ def load_shard(cfg, path: str | Path, warm_start: bool = True) -> tuple[Graph, S
 		buf = io.BytesIO(model_bytes)
 		checkpoint = torch.load(buf, weights_only=True)
 		model.load_state_dict(checkpoint["model"])
-		Shard.load_state_dict(checkpoint["Shard"])
+		shard.load_state_dict(checkpoint["shard"])
 	elif not warm_start:
 		load_base_model(model)
 
-	return graph, model, Shard
+	return graph, model, shard
 
 
 def read_shard_metadata(path: str | Path) -> dict:

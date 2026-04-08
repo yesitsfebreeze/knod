@@ -40,16 +40,16 @@ class ShardIndexEntry:
 
 
 class Shard:
-	"""One Shard = graph + model + Shard layer."""
+	"""One shard = graph + model + shard layer."""
 
-	__slots__ = ("name", "purpose", "graph", "model", "Shard")
+	__slots__ = ("name", "purpose", "graph", "model", "shard")
 
-	def __init__(self, name, purpose, graph, model, Shard):
+	def __init__(self, name, purpose, graph, model, shard):
 		self.name = name
 		self.purpose = purpose
 		self.graph = graph
 		self.model = model
-		self.Shard = Shard
+		self.shard = shard
 
 
 @dataclass

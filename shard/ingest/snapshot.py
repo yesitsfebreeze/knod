@@ -1,5 +1,5 @@
 from ..config import Config
-from ..Shard.graph import Graph
+from ..shard.graph import Graph
 from ..util.math import cosine
 from .prepare import PreparedArticle
 

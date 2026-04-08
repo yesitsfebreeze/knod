@@ -5,7 +5,7 @@ import numpy as np
 
 from ..config import Config
 from ..provider import Provider
-from ..Shard.graph import Graph
+from ..shard.graph import Graph
 
 log = logging.getLogger(__name__)
 

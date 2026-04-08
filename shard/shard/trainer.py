@@ -14,14 +14,14 @@ class GNNTrainer:
 	Base MPNN uses a fixed low LR (1e-5); ShardLayer uses adaptive LR.
 	"""
 
-	def __init__(self, model: ShardMPNN, Shard: ShardLayer, cfg: Config):
+	def __init__(self, model: ShardMPNN, shard: ShardLayer, cfg: Config):
 		self.model = model
-		self.Shard = Shard
+		self.shard = shard
 		self.cfg = cfg
 		self.optimizer = torch.optim.AdamW(
 			[
 				{"params": list(model.parameters()), "lr": 1e-5},  # base: fixed low LR
-				{"params": list(Shard.parameters()), "lr": cfg.lr_max},  # Shard: adaptive LR
+				{"params": list(shard.parameters()), "lr": cfg.lr_max},  # shard: adaptive LR
 			],
 			betas=(0.9, 0.999),
 			weight_decay=cfg.weight_decay,
@@ -39,9 +39,9 @@ class GNNTrainer:
 	def train_step(self, node_features, edge_index, edge_features, num_thoughts: int):
 		"""One training step with edge masking + link prediction loss."""
 		self.model.train()
-		self.Shard.train()
+		self.shard.train()
 
-		# Adaptive LR: only Shard group (index 1) adapts; base (index 0) stays at 1e-5
+		# Adaptive LR: only shard group (index 1) adapts; base (index 0) stays at 1e-5
 		lr = self.adaptive_lr(num_thoughts)
 		self.optimizer.param_groups[1]["lr"] = lr
 
@@ -60,7 +60,7 @@ class GNNTrainer:
 
 		# Forward with visible edges
 		hidden, scores = self.model(node_features, visible_edge_index, visible_edge_features)
-		hidden, scores = self.Shard(hidden, visible_edge_index)
+		hidden, scores = self.shard(hidden, visible_edge_index)
 
 		# Link prediction loss: masked edges should score high
 		masked_src = edge_index[0, mask_indices]
@@ -83,7 +83,7 @@ class GNNTrainer:
 		self.optimizer.zero_grad()
 		loss.backward()
 		torch.nn.utils.clip_grad_norm_(
-			list(self.model.parameters()) + list(self.Shard.parameters()),
+			list(self.model.parameters()) + list(self.shard.parameters()),
 			max_norm=1.0,
 		)
 		self.optimizer.step()
@@ -97,7 +97,7 @@ class GNNTrainer:
 		for the caller to extract and merge into the base model.
 		"""
 		from .graph import Graph
-		from .store import extract_routing_from_Shard
+		from .store import extract_routing_from_shard
 
 		assert isinstance(graph, Graph)
 
@@ -116,7 +116,7 @@ class GNNTrainer:
 		for _ in range(steps):
 			total_loss += self.train_step(node_features, edge_index, edge_features, graph.num_thoughts)
 
-		self.last_routing = extract_routing_from_Shard(graph, self.model, self.Shard)
+		self.last_routing = extract_routing_from_shard(graph, self.model, self.shard)
 
 		return total_loss / steps
 

@@ -76,16 +76,19 @@ class ChatToolHandler:
 	def __init__(self, handler: "Handler"):
 		self._handler = handler
 
-	def ask(self, query: str) -> dict:
-		answer, sources = self._handler.ask(query)
+	def ask(self, query: str, knid: str | None = None) -> dict:
+		answer, sources = self._handler.ask(query, knid=knid)
 		return {"answer": answer, "sources": sources}
 
 	def ingest(self, text: str, source: str = "", descriptor: str = "") -> dict:
 		result = self._handler.ingest(text, source=source, descriptor=descriptor)
 		return {"status": result}
 
+	def ingest_sync(self, text: str, source: str = "", descriptor: str = "") -> dict:
+		return self._handler.ingest_sync(text, source=source, descriptor=descriptor)
+
 	def find_thoughts(self, query: str, k: int = 5) -> dict:
-		return self._handler.find_thoughts_by_query(query, k=k)
+		return {"thoughts": self._handler.find_thoughts_by_query(query, k=k)}
 
 	def set_purpose(self, purpose: str) -> dict:
 		self._handler.set_purpose(purpose)
@@ -114,14 +117,60 @@ class ChatToolHandler:
 	def graph_stats(self) -> dict:
 		return self._handler.graph_stats()
 
-	def list_Shards(self) -> dict:
-		return {"Shards": self._handler.list_Shards()}
-
-	def ingest_sync(self, text: str, source: str = "", descriptor: str = "") -> dict:
-		return self._handler.ingest_sync(text, source=source, descriptor=descriptor)
+	def list_shards(self) -> dict:
+		return {"shards": self._handler.list_shards()}
 
 	def relink(self) -> dict:
 		return self._handler.relink()
+
+	def status(self) -> dict:
+		return {"status": self._handler.status()}
+
+	def get_diff(self) -> dict:
+		return self._handler.get_diff()
+
+	def graph_info(self) -> dict:
+		return self._handler.graph_info
+
+	def graph_full(self) -> dict:
+		return self._handler.graph_full()
+
+	def list_descriptors(self) -> dict:
+		return {"descriptors": self._handler.graph_info.get("descriptors", {})}
+
+	def create_shard(self, name: str, purpose: str, location: str = "", knid: str | None = None) -> dict:
+		"""Create a new shard and register it."""
+		location = location or self._handler.cfg.store_path
+		path = self._handler.create_shard(name, purpose, location, knid=knid)
+		return {"name": name, "purpose": purpose, "path": path, "knid": knid}
+
+	def ingest_into_shard(self, shard_name: str, text: str, source: str = "", descriptor: str = "") -> dict:
+		"""Ingest text directly into a named shard."""
+		try:
+			count = self._handler.ingest_into_shard(shard_name, text, source=source, descriptor=descriptor)
+			return {"shard": shard_name, "committed": count}
+		except KeyError as e:
+			return {"error": str(e)}
+
+	def get_ingested_sources(self) -> dict:
+		return {"sources": list(self._handler.ingested_sources())}
+
+	def process(self, operations: list[dict]) -> dict:
+		"""Execute a batch of operations. Each operation is a dict with 'tool' and 'args'."""
+		results = []
+		for op in operations:
+			tool_name = op.get("tool")
+			args = op.get("args", {})
+			if not tool_name or not hasattr(self, tool_name):
+				results.append({"op": op, "error": f"Unknown tool: {tool_name}"})
+				continue
+			try:
+				tool = getattr(self, tool_name)
+				result = tool(**args)
+				results.append({"op": op, "result": result})
+			except Exception as e:
+				results.append({"op": op, "error": str(e)})
+		return {"results": results}
 
 
 def http(handler: Handler) -> FastAPI:
@@ -153,9 +202,9 @@ def http(handler: Handler) -> FastAPI:
 	def stats():
 		return handler.graph_stats()
 
-	@app.get("/Shards")
-	def Shards():
-		return handler.list_Shards()
+	@app.get("/shards")
+	def shards():
+		return handler.list_shards()
 
 	@app.get("/thought/{thought_id}")
 	def get_thought(thought_id: int):

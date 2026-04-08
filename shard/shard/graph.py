@@ -1,4 +1,4 @@
-"""Shard graph — Thought, Edge, LimboThought, Graph data structures."""
+"""shard graph — Thought, Edge, LimboThought, Graph data structures."""
 
 import time
 from dataclasses import dataclass, field
@@ -127,7 +127,7 @@ class Graph:
 		self.descriptors: dict[str, str] = {}
 		self._next_id: int = 1
 		self._profile: np.ndarray | None = None  # running mean of embeddings
-		self._registry_nodes: dict[str, int] = {}  # Shard name → thought id in this graph
+		self._registry_nodes: dict[str, int] = {}  # shard name → thought id in this graph
 		self.limbo: list[LimboThought] = []
 		self.max_thoughts: int = max_thoughts  # 0 = unlimited
 		self.max_edges: int = max_edges  # 0 = unlimited

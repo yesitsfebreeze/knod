@@ -2,8 +2,8 @@ import logging
 
 from ..config import Config
 from ..provider import Provider
-from ..Shard.graph import Graph
-from ..Shard.types import IngestResult
+from ..shard.graph import Graph
+from ..shard.types import IngestResult
 from .prepare import prepare
 from .snapshot import snapshot
 from .dedup import dedup

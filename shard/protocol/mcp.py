@@ -76,9 +76,9 @@ def _mcp(handler: Handler) -> FastMCP:
 		return json.dumps(handler.graph_stats())
 
 	@mcp.tool()
-	def list_Shards() -> str:
-		"""List all loaded Shards with their purpose, thought/edge counts, descriptors, and cluster membership."""
-		return json.dumps(handler.list_Shards())
+	def list_shards() -> str:
+		"""List all loaded shards with their purpose, thought/edge counts, descriptors, and cluster membership."""
+		return json.dumps(handler.list_shards())
 
 	@mcp.tool()
 	def ingest_sync(text: str, source: str = "", descriptor: str = "") -> str:
@@ -114,10 +114,10 @@ def _mcp(handler: Handler) -> FastMCP:
 		"""List all descriptors as JSON."""
 		return json.dumps(handler.graph_info["descriptors"])
 
-	@mcp.resource("shard://Shards")
-	def Shards_resource() -> str:
-		"""List all loaded Shards as JSON."""
-		return json.dumps(handler.list_Shards())
+	@mcp.resource("shard://shards")
+	def shards_resource() -> str:
+		"""List all loaded shards as JSON."""
+		return json.dumps(handler.list_shards())
 
 	@mcp.resource("shard://stats")
 	def stats_resource() -> str:

@@ -1,14 +1,14 @@
 import json
 import logging
 import numpy as np
-from openai import OpenAI, APIStatusError, APITimeoutError, APIConnectionError, RateLimitError
+from openai import OpenAI, APIStatusError, APITimeoutError, APIConnectionError, RateLimitError, AuthenticationError
 from anthropic import Anthropic
 
 from .config import Config
 
 log = logging.getLogger(__name__)
 
-_FALLBACK_ERRORS = (RateLimitError, APITimeoutError, APIConnectionError)
+_FALLBACK_ERRORS = (RateLimitError, APITimeoutError, APIConnectionError, APIStatusError, AuthenticationError)
 
 
 TOOL_DEFINITIONS = [
@@ -144,8 +144,8 @@ TOOL_DEFINITIONS = [
 	{
 		"type": "function",
 		"function": {
-			"name": "list_Shards",
-			"description": "List all loaded Shards with their purpose, counts, and descriptors.",
+			"name": "list_shards",
+			"description": "List all loaded shards with their purpose, counts, and descriptors.",
 			"parameters": {
 				"type": "object",
 				"properties": {},
@@ -189,10 +189,13 @@ class Provider:
 
 		if self._use_anthropic:
 			self._anthropic = Anthropic(api_key=cfg.anthropic_api_key, base_url=cfg.anthropic_base_url or None)
-			self._openai = None
 		else:
 			self._anthropic = None
+
+		if cfg.api_key:
 			self._openai = OpenAI(api_key=cfg.api_key, base_url=cfg.base_url)
+		else:
+			self._openai = None
 
 		self.embedding_model = cfg.embedding_model
 		self.chat_model = cfg.chat_model
@@ -207,18 +210,28 @@ class Provider:
 
 	def _chat(self, **kwargs) -> "openai.types.chat.ChatCompletion":
 		if self._use_anthropic:
-			return self._anthropic_chat(**kwargs)
-		return self._openai_chat(**kwargs)
+			try:
+				return self._anthropic_chat(**kwargs)
+			except _FALLBACK_ERRORS as exc:
+				log.warning("Anthropic failed (%s), trying OpenAI", exc)
+
+		if self._cfg.api_key:
+			try:
+				return self._openai_chat(**kwargs)
+			except _FALLBACK_ERRORS as exc:
+				log.warning("OpenAI failed (%s), trying local fallback", exc)
+
+		if self._fallback is not None:
+			return self._fallback_chat(**kwargs)
+
+		raise RuntimeError("No providers available: set ANTHROPIC_API_KEY, OPENAI_API_KEY, or configure fallback")
 
 	def _openai_chat(self, **kwargs) -> "openai.types.chat.ChatCompletion":
-		try:
-			return self._openai.chat.completions.create(**kwargs)
-		except _FALLBACK_ERRORS as exc:
-			if self._fallback is None:
-				raise
-			log.warning("Primary provider failed (%s), falling back to local", exc)
-			kwargs["model"] = self._fallback_chat_model
-			return self._fallback.chat.completions.create(**kwargs)
+		return self._openai.chat.completions.create(**kwargs)
+
+	def _fallback_chat(self, **kwargs) -> "openai.types.chat.ChatCompletion":
+		kwargs["model"] = self._fallback_chat_model
+		return self._fallback.chat.completions.create(**kwargs)
 
 	def _anthropic_chat(self, **kwargs) -> "openai.types.chat.ChatCompletion":
 		messages = kwargs.pop("messages", [])
@@ -234,6 +247,9 @@ class Provider:
 
 		anthropic_messages = [{"role": m["role"], "content": m["content"]} for m in user_messages]
 
+		# Anthropic doesn't support response_format - remove it
+		kwargs.pop("response_format", None)
+
 		try:
 			resp = self._anthropic.messages.create(
 				model=model,
@@ -248,6 +264,8 @@ class Provider:
 			if self._fallback is None:
 				raise
 			log.warning("Anthropic failed (%s), falling back to local", exc)
+			# Strip kwargs that OpenAI doesn't support
+			kwargs.pop("response_format", None)
 			kwargs["model"] = self._fallback_chat_model
 			return self._fallback.chat.completions.create(**kwargs)
 

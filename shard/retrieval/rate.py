@@ -1,6 +1,6 @@
 """Retrieval · Rate — final re-ranking pass on thoughts against the query.
 
-After Stage 1 (Shard match) and Stage 2 (thought retrieval + merge),
+After Stage 1 (shard match) and Stage 2 (thought retrieval + merge),
 this module re-scores each thought by combining the merge score with a
 direct cosine similarity check against the query. This penalises thoughts
 that ranked highly on structural signals (GNN / edges) but are tangential
@@ -9,7 +9,7 @@ to the actual question.
 
 import numpy as np
 
-from ..Shard.graph import Thought
+from ..shard.graph import Thought
 from ..util.math import cosine
 
 
@@ -27,7 +27,7 @@ def rate_thoughts(
 	scored : list of (Thought, float)
 		Pre-sorted merge results from Stage 2.
 	merge_weight : float
-		Weight given to the original merge score (1 − merge_weight goes to direct cosine).
+		Weight given to the original merge score (1 - merge_weight goes to direct cosine).
 
 	Returns
 	-------

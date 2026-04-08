@@ -1,4 +1,4 @@
-"""Base MPNN (3-layer message passing) + ShardLayer (per-Shard fine-tuning)."""
+"""Base MPNN (3-layer message passing) + ShardLayer (per-shard fine-tuning)."""
 
 import torch
 import torch.nn as nn
