@@ -94,7 +94,7 @@ class Handler:
 			except (ValueError, Exception) as e:
 				log.warning("Failed to load %s (%s) — starting fresh", shard_file, e)
 				shard_file.unlink(missing_ok=True)
-		if not hasattr(self, "graph"):
+		if self.graph is None:
 			log.info("Creating new graph")
 			self.graph = Graph(
 				max_thoughts=self.cfg.max_thoughts,
