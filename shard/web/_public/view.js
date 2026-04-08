@@ -2974,7 +2974,7 @@ try {
 	const res = await fetch("/graph/meta");
 	if (res.ok) {
 		const d = await res.json();
-		if (d?.nodes) metaData = d;
+		if (d?.nodes !== undefined) metaData = d;
 	}
 } catch {}
 
@@ -3033,8 +3033,8 @@ async function pollForUpdates() {
 		const diff = await (await fetch("/diff")).json();
 		if (diff.added_count > 0) {
 			console.log(`New thoughts: ${diff.added_count}`);
-			const newData = await (await fetch("/graph/full")).json();
-			layout(newData);
+			const newData = await (await fetch(`/graph/thoughts?offset=${lastThoughtCount}&limit=${diff.added_count}`)).json();
+			if (newData.nodes?.length) appendThoughts(newData.nodes);
 			document.getElementById("s-nodes").textContent = thought_nodes.length;
 			document.getElementById("s-edges").textContent = edges.length;
 			lastThoughtCount = diff.thought_count;
