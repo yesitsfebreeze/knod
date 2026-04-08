@@ -191,7 +191,7 @@ def _spawn_shard(
 	graph_path = str(hashed_path)
 	registry.register(graph_path)
 
-	shards[name] = shard(
+	shards[name] = Shard(
 		name=name,
 		purpose=purpose,
 		graph=graph,
