@@ -336,6 +336,16 @@ def http(handler: Handler) -> FastAPI:
 	def graph_meta():
 		return handler.graph_meta()
 
+	@app.get("/graph/seed")
+	def graph_seed(n: int = 12):
+		return handler.graph_seed(n=n)
+
+	@app.post("/graph/expand")
+	def graph_expand(body: dict):
+		keys = body.get("keys", [])
+		known = set(body.get("known", []))
+		return handler.graph_expand(keys=keys, known=known)
+
 	@app.get("/graph/thoughts")
 	def graph_thoughts(offset: int = 0, limit: int = 200):
 		return handler.graph_thoughts(offset=offset, limit=limit)

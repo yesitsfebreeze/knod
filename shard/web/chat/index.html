@@ -253,15 +253,30 @@
 			width: fit-content;
 			margin: 0 auto;
 			padding-bottom: 14px;
-			transition: transform 0.55s var(--ease), opacity 0.45s var(--ease);
-			transform-origin: center center;
+			pointer-events: none;
+			user-select: none;
+		}
+
+		/* ── Xaver header (appears after first response) ─────────────────── */
+		#xaver-header {
+			display: none;
+			font-family: var(--font-ui);
+			font-size: 1.1rem;
+			font-weight: 300;
+			letter-spacing: 0.13em;
+			text-transform: uppercase;
+			color: var(--text-muted);
+			width: fit-content;
+			padding: 28px 0 6px;
+			opacity: 0;
+			transition: transform 0.65s var(--ease), opacity 0.5s var(--ease);
 			pointer-events: none;
 			user-select: none;
 			will-change: transform;
 		}
 
-		#app.chat-active #wordmark {
-			display: none;
+		#app.chat-active #xaver-header {
+			display: block;
 		}
 
 		/* ── Input area ──────────────────────────────────────────────────── */
@@ -441,10 +456,11 @@
 <body>
 <canvas id="gpu-canvas"></canvas>
 <div id="app">
+		<div id="xaver-header">Xaver</div>
 		<div id="messages"></div>
 
 		<div id="input-area">
-			<div id="wordmark">Xaber</div>
+			<div id="wordmark">Xaver</div>
 			<div id="input-glass">
 				<textarea id="input" rows="1" placeholder="Ask anything…" autocomplete="off" spellcheck="false"></textarea>
 				<button id="send">
@@ -540,7 +556,7 @@
 
 				const roleEl = document.createElement('div');
 				roleEl.className = 'message__role';
-				roleEl.textContent = msg.role === 'user' ? 'you' : 'shard';
+				roleEl.textContent = msg.role === 'user' ? 'you' : 'Xaver';
 
 				const body = document.createElement('div');
 				body.className = 'message__body';
@@ -579,15 +595,21 @@
 				this.sendEl = document.getElementById('send');
 				this.sessionNameEl = document.getElementById('session-name');
 				this.wordmarkEl = document.getElementById('wordmark');
-				this._wordmarkDocked = false;
-				this.inputEl.addEventListener('input', () => { this._resize(); this._updateWordmark(); });
+				this.headerEl = document.getElementById('xaver-header');
+				this.inputAreaEl = document.getElementById('input-area');
+				this._headerShown = false;
+				this.inputEl.addEventListener('input', () => this._resize());
 				document.getElementById('session-new').addEventListener('click', () => {
 					State.setActive(State.createSession());
 					this.messagesEl.innerHTML = '';
 					this.appEl.classList.remove('chat-active');
 					App.started = false;
 					this.updateSessionDisplay(null);
-					this._undockWordmark();
+					this._headerShown = false;
+					this.wordmarkEl.style.cssText = '';
+					this.headerEl.style.cssText = '';
+					this.inputAreaEl.style.transform = '';
+					this.inputAreaEl.style.transition = '';
 					this.inputEl.focus();
 				});
 				this.updateSessionDisplay(null);
@@ -602,7 +624,43 @@
 				this.inputEl.style.height = Math.min(this.inputEl.scrollHeight, 200) + 'px';
 			},
 			activateChat() {
+				const before = this.inputAreaEl.getBoundingClientRect();
 				this.appEl.classList.add('chat-active');
+				void this.inputAreaEl.offsetHeight; // force reflow
+				const after = this.inputAreaEl.getBoundingClientRect();
+				const dy = before.top - after.top;
+				if (Math.abs(dy) > 1) {
+					this.inputAreaEl.style.transition = 'none';
+					this.inputAreaEl.style.transform = `translateY(${dy}px)`;
+					requestAnimationFrame(() => requestAnimationFrame(() => {
+						this.inputAreaEl.style.transition = 'transform 0.65s var(--ease)';
+						this.inputAreaEl.style.transform = '';
+					}));
+				}
+			},
+			flyWordmarkToHeader() {
+				if (this._headerShown) return;
+				this._headerShown = true;
+				const wR = this.wordmarkEl.getBoundingClientRect();
+				const hR = this.headerEl.getBoundingClientRect();
+				const wCx = wR.left + wR.width / 2;
+				const wCy = wR.top + wR.height / 2;
+				const hCx = hR.left + hR.width / 2;
+				const hCy = hR.top + hR.height / 2;
+				const tx = wCx - hCx;
+				const ty = wCy - hCy;
+				// Fade out wordmark
+				this.wordmarkEl.style.transition = 'opacity 0.25s var(--ease)';
+				this.wordmarkEl.style.opacity = '0';
+				// Start header at wordmark's position, then fly to natural place
+				this.headerEl.style.transition = 'none';
+				this.headerEl.style.transform = `translate(${tx}px, ${ty}px) scale(0.85)`;
+				this.headerEl.style.opacity = '0';
+				requestAnimationFrame(() => requestAnimationFrame(() => {
+					this.headerEl.style.transition = 'transform 0.65s var(--ease), opacity 0.5s var(--ease)';
+					this.headerEl.style.transform = '';
+					this.headerEl.style.opacity = '1';
+				}));
 			},
 			addMessage(msg) {
 				const el = MessageComponent.create(msg);
@@ -624,32 +682,6 @@
 					this.inputEl.focus();
 					this._resize();
 				}
-			},
-			_updateWordmark() {
-				if (this.inputEl.value.length > 0 && !this._wordmarkDocked) {
-					this._dockWordmark();
-				} else if (this.inputEl.value.length === 0 && this._wordmarkDocked) {
-					this._undockWordmark();
-				}
-			},
-			_dockWordmark() {
-				const wR = this.wordmarkEl.getBoundingClientRect();
-				const gR = document.getElementById('input-glass').getBoundingClientRect();
-				const scale = 0.42;
-				const fromX = wR.left + wR.width / 2;
-				const fromY = wR.top + wR.height / 2;
-				const targetX = gR.left + 28;
-				const targetY = gR.top + gR.height / 2;
-				const tx = targetX - fromX;
-				const ty = targetY - fromY;
-				this.wordmarkEl.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
-				this.wordmarkEl.style.opacity = '0.55';
-				this._wordmarkDocked = true;
-			},
-			_undockWordmark() {
-				this.wordmarkEl.style.transform = '';
-				this.wordmarkEl.style.opacity = '';
-				this._wordmarkDocked = false;
 			},
 			getInput() { return this.inputEl.value.trim(); },
 			clearInput() { this.inputEl.value = ''; this.inputEl.style.height = 'auto'; },
@@ -701,10 +733,12 @@
 						sources: result.sources ?? null,
 					});
 					UI.addMessage(reply);
+					UI.flyWordmarkToHeader();
 				} catch (err) {
 					UI.removeThinking(thinking);
 					const errMsg = State.addMessage({ role: 'assistant', content: `Error: ${err.message}`, error: true });
 					UI.addMessage(errMsg);
+					UI.flyWordmarkToHeader();
 				} finally {
 					UI.setLoading(false);
 				}

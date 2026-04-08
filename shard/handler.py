@@ -746,25 +746,11 @@ class Handler:
 		return {"nodes": nodes, "edges": edges, "knn_edges": knn_edges}
 
 	def graph_meta(self) -> dict:
-		"""Lightweight snapshot: shard hub nodes + all semantic edges for fast initial render."""
+		"""Lightweight snapshot: shard hub nodes + total thought count for fast initial render."""
 		nodes = []
 		edges = []
 		seen: set[tuple[str, str]] = set()
 		total = self.graph.num_thoughts
-
-		# Global semantic edges
-		for e in self.graph.edges:
-			ek = (str(e.source_id), str(e.target_id))
-			if ek not in seen:
-				seen.add(ek)
-				edges.append({
-					"source": str(e.source_id),
-					"target": str(e.target_id),
-					"weight": round(e.weight, 3),
-					"reasoning": e.reasoning[:120],
-					"success_rate": round(e.success_rate, 3),
-				})
-
 		for name, shard in self._shards.items():
 			total += shard.graph.num_thoughts
 			hub_key = f"_shard:{name}"
@@ -777,7 +763,6 @@ class Handler:
 				"access_count": 0,
 				"created_at": 0,
 			})
-			# Hub membership edges
 			for t in shard.graph.thoughts.values():
 				ek = (hub_key, f"{name}:{t.id}")
 				if ek not in seen:
@@ -789,20 +774,115 @@ class Handler:
 						"reasoning": f"belongs to {name}",
 						"success_rate": 0.0,
 					})
-			# Shard semantic edges
-			for e in shard.graph.edges:
-				ek = (f"{name}:{e.source_id}", f"{name}:{e.target_id}")
-				if ek not in seen:
-					seen.add(ek)
-					edges.append({
-						"source": f"{name}:{e.source_id}",
-						"target": f"{name}:{e.target_id}",
-						"weight": round(e.weight, 3),
-						"reasoning": e.reasoning[:120],
-						"success_rate": round(e.success_rate, 3),
-					})
-
 		return {"nodes": nodes, "edges": edges, "knn_edges": [], "total_thoughts": total}
+
+	def _thought_node(self, t: "Thought", prefix: str = "") -> dict:
+		return {
+			"key": f"{prefix}{t.id}" if prefix else str(t.id),
+			"label": t.text[:80],
+			"source": t.source,
+			"store": prefix.rstrip(":") if prefix else "global",
+			"type": "thought",
+			"access_count": t.access_count,
+			"created_at": t.created_at,
+			"last_accessed": t.last_accessed,
+		}
+
+	def _edge_dict(self, e: "Edge", prefix: str = "") -> dict:
+		return {
+			"source": f"{prefix}{e.source_id}" if prefix else str(e.source_id),
+			"target": f"{prefix}{e.target_id}" if prefix else str(e.target_id),
+			"weight": round(e.weight, 3),
+			"reasoning": e.reasoning[:120],
+			"success_rate": round(e.success_rate, 3),
+		}
+
+	def graph_seed(self, n: int = 12) -> dict:
+		"""Return N random seed thoughts with their incident edges.
+
+		Samples proportionally across global graph and shards so every
+		store gets representation. Called once on initial page load.
+		"""
+		import random
+
+		# Build pool: (thought, prefix, graph)
+		pool: list[tuple] = []
+		for t in self.graph.thoughts.values():
+			pool.append((t, "", self.graph))
+		for name, shard in self._shards.items():
+			for t in shard.graph.thoughts.values():
+				pool.append((t, f"{name}:", shard.graph))
+
+		seeds = random.sample(pool, min(n, len(pool)))
+		seed_keys = {f"{prefix}{t.id}" for t, prefix, _ in seeds}
+
+		nodes = [self._thought_node(t, prefix) for t, prefix, _ in seeds]
+		edges = []
+		seen_ek: set[tuple[str, str]] = set()
+
+		for t, prefix, graph in seeds:
+			for e in graph.edges:
+				if e.source_id != t.id and e.target_id != t.id:
+					continue
+				ek = (f"{prefix}{e.source_id}", f"{prefix}{e.target_id}")
+				if ek in seen_ek:
+					continue
+				seen_ek.add(ek)
+				edges.append(self._edge_dict(e, prefix))
+
+		total = sum(g.num_thoughts for g in [self.graph] + [s.graph for s in self._shards.values()])
+		return {"nodes": nodes, "edges": edges, "total_thoughts": total, "seed_keys": list(seed_keys)}
+
+	def graph_expand(self, keys: list[str], known: set[str]) -> dict:
+		"""Given a set of node keys, return their neighbors and connecting edges.
+
+		`known` is the set of keys the client already has — returned nodes
+		and edges only contain new data so the client just appends.
+		"""
+		# Parse keys → (thought, prefix, graph)
+		def _resolve(key: str):
+			if ":" in key:
+				parts = key.split(":", 1)
+				name, tid_str = parts[0], parts[1]
+				shard = self._shards.get(name)
+				if shard is None:
+					return None
+				t = shard.graph.thoughts.get(int(tid_str))
+				return (t, f"{name}:", shard.graph) if t else None
+			else:
+				t = self.graph.thoughts.get(int(key))
+				return (t, "", self.graph) if t else None
+
+		nodes = []
+		edges = []
+		seen_ek: set[tuple[str, str]] = set()
+		new_keys: set[str] = set()
+
+		for key in keys:
+			resolved = _resolve(key)
+			if resolved is None:
+				continue
+			t, prefix, graph = resolved
+
+			for e in graph.edges:
+				if e.source_id != t.id and e.target_id != t.id:
+					continue
+				neighbor_id = e.target_id if e.source_id == t.id else e.source_id
+				neighbor_key = f"{prefix}{neighbor_id}"
+				ek = (f"{prefix}{e.source_id}", f"{prefix}{e.target_id}")
+
+				if ek not in seen_ek:
+					seen_ek.add(ek)
+					# Include edge if at least one endpoint is known or being expanded
+					edges.append(self._edge_dict(e, prefix))
+
+				if neighbor_key not in known and neighbor_key not in new_keys:
+					neighbor = graph.thoughts.get(neighbor_id)
+					if neighbor:
+						new_keys.add(neighbor_key)
+						nodes.append(self._thought_node(neighbor, prefix))
+
+		return {"nodes": nodes, "edges": edges}
 
 	def graph_thoughts(self, offset: int = 0, limit: int = 200) -> dict:
 		"""Paginated thought nodes from global graph and all shards."""
@@ -830,7 +910,7 @@ class Handler:
 					"created_at": t.created_at,
 					"last_accessed": t.last_accessed,
 				})
-		return {"nodes": all_nodes[offset : offset + limit]}
+		return {"nodes": all_nodes[offset : offset + limit], "total": len(all_nodes)}
 
 	def _relink_thoughts(self, graph: Graph, thought_ids: list[int]) -> tuple[int, int]:
 		"""Relink only the specified thought IDs against all existing thoughts.

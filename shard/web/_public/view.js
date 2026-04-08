@@ -324,6 +324,7 @@ let node_idx = {}, nbrs = {}, edgeAdj = {};
 let store_clr = {}, clrI = 0;
 let layout_state = { tagPos: {}, angleOf: {}, sw: Math.PI * 2 };
 let rawEdgeData = { edges: [], knn_edges: [] };
+let knownNodeKeys = new Set(); // tracks all node keys loaded so far for BFS expand
 let dimension_tags = [], dimensionControlEls = new Map();
 let dimension_weights = new Map(), dimension_vectors = new Map();
 let dimension_selection = { strength: 0, boosted: new Set(), suppressed: new Set(), deltas: new Map(), boosts: new Map(), fades: new Map() };
@@ -2971,61 +2972,93 @@ geom = buildStaticGeometry(dev);
 ({ circleMaskP, boxMaskP, triangleMaskP, circleFillP, boxFillP, triangleFillP, circleP, boxP, triangleP, edgeP, markerFillP, markerP, ub, bg } = makePipes(dev, fmt));
 bufs = buildBufs(dev);
 
-// Load shards + edges first for fast initial render, fallback to full load
+// Seed load: a few random thoughts + their edges, then BFS-expand the whole graph
 let metaData = null;
 try {
-	const res = await fetch("/graph/meta");
-	if (res.ok) {
-		const d = await res.json();
-		if (d?.nodes !== undefined) metaData = d;
-	}
-} catch {}
-
-if (metaData) {
-	layout(metaData);
-	document.getElementById("loading").remove();
-	document.getElementById("s-nodes").textContent = thought_nodes.length;
-	document.getElementById("s-edges").textContent = edges.length;
-	setupSpiralControls();
-	setupThemeControls();
-	setupRecencyColorControls();
-	setupPanelSettings();
-
-	// Stream thoughts in batches
-	const BATCH_SIZE = 200;
-	let batchOffset = 0;
-	const totalThoughts = metaData.total_thoughts ?? 0;
-	while (batchOffset < totalThoughts) {
-		let batch;
-		try {
-			batch = await (await fetch(`/graph/thoughts?offset=${batchOffset}&limit=${BATCH_SIZE}`)).json();
-		} catch (e) {
-			console.error("Thought batch load error:", e);
-			break;
-		}
-		if (!batch.nodes?.length) break;
-		appendThoughts(batch.nodes);
-		document.getElementById("s-nodes").textContent = thought_nodes.length;
-		batchOffset += batch.nodes.length;
-		if (batch.nodes.length < BATCH_SIZE) break;
-	}
-} else {
-	// Fallback: full load (server not updated yet or meta unavailable)
+	const res = await fetch("/graph/seed?n=12");
+	if (res.ok) metaData = await res.json();
+} catch (e) {
+	document.getElementById("loading").textContent = `Load failed: ${e.message}`;
+	throw e;
+}
+if (!metaData) {
 	try {
 		metaData = await (await fetch("/graph/full")).json();
 	} catch (e) {
 		document.getElementById("loading").textContent = `Load failed: ${e.message}`;
 		throw e;
 	}
-	layout(metaData);
-	document.getElementById("loading").remove();
-	document.getElementById("s-nodes").textContent = thought_nodes.length;
-	document.getElementById("s-edges").textContent = edges.length;
-	setupSpiralControls();
-	setupThemeControls();
-	setupRecencyColorControls();
-	setupPanelSettings();
 }
+
+layout(metaData);
+document.getElementById("loading").remove();
+document.getElementById("s-nodes").textContent = thought_nodes.length;
+document.getElementById("s-edges").textContent = edges.length;
+setupSpiralControls();
+setupThemeControls();
+setupRecencyColorControls();
+setupPanelSettings();
+
+// Seed the known set
+for (const n of all_nodes) knownNodeKeys.add(n.key);
+
+// One BFS chain per seed node — all run in parallel, share knownNodeKeys to avoid duplicates
+async function bfsChain(startKey) {
+	let frontier = [startKey];
+	while (frontier.length > 0) {
+		let data;
+		try {
+			data = await (await fetch("/graph/expand", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ keys: frontier, known: [...knownNodeKeys] }),
+			})).json();
+		} catch (e) {
+			console.error("BFS chain error:", e);
+			break;
+		}
+		rawEdgeData.edges.push(...(data.edges || []));
+		// Claim new nodes immediately before other chains see them
+		const newNodes = (data.nodes || []).filter(n => !knownNodeKeys.has(n.key));
+		newNodes.forEach(n => knownNodeKeys.add(n.key));
+		if (newNodes.length) {
+			appendThoughts(newNodes);
+			frontier = newNodes.map(n => n.key);
+		} else {
+			resolveEdges();
+			frontier = [];
+		}
+		document.getElementById("s-nodes").textContent = thought_nodes.length;
+		document.getElementById("s-edges").textContent = edges.length;
+		await new Promise(r => setTimeout(r, 0)); // yield to renderer
+	}
+}
+
+(async function bfsLoad() {
+	// Fire one chain per seed in parallel — they race across the graph simultaneously
+	await Promise.all(metaData.nodes.map(n => bfsChain(n.key)));
+
+	// Final sweep: pick up any thoughts unreachable by edges (isolated nodes)
+	const total = metaData?.total_thoughts ?? 0;
+	if (thought_nodes.length < total) {
+		const BATCH = 200;
+		const offsets = [];
+		for (let off = 0; off < total; off += BATCH) offsets.push(off);
+		await Promise.all(offsets.map(off =>
+			fetch(`/graph/thoughts?offset=${off}&limit=${BATCH}`)
+				.then(r => r.json())
+				.then(batch => {
+					if (batch.nodes?.length) {
+						appendThoughts(batch.nodes);
+						batch.nodes.forEach(n => knownNodeKeys.add(n.key));
+						document.getElementById("s-nodes").textContent = thought_nodes.length;
+						document.getElementById("s-edges").textContent = edges.length;
+					}
+				})
+				.catch(e => console.error("Thought sweep error:", e))
+		));
+	}
+})();
 
 // ---- live poll for updates ----
 let lastThoughtCount = metaData?.total_thoughts ?? thought_nodes.length;
@@ -3047,8 +3080,12 @@ async function pollForUpdates() {
 		}
 
 		if (diff.edge_count !== undefined && diff.edge_count !== lastEdgeCount) {
-			const meta = await (await fetch("/graph/meta")).json();
-			rawEdgeData = { edges: meta.edges || [], knn_edges: meta.knn_edges || [] };
+			const expandData = await (await fetch("/graph/expand", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ keys: [...knownNodeKeys], known: [...knownNodeKeys] }),
+			})).json();
+			rawEdgeData.edges.push(...(expandData.edges || []));
 			resolveEdges();
 			lastEdgeCount = diff.edge_count;
 			changed = true;
