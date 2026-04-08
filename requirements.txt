@@ -1,0 +1,8 @@
+openai>=1.0
+anthropic>=0.18.0
+numpy
+torch_geometric
+fastapi
+uvicorn[standard]
+pydantic
+mcp>=1.0
