@@ -12,9 +12,9 @@ from ..handler import Handler
 log = logging.getLogger(__name__)
 
 
-def _mcp(handler: Handler) -> FastMCP:
+def _mcp(handler: Handler, host: str = "127.0.0.1", port: int = 8766) -> FastMCP:
 	"""Build a FastMCP server wired to the shared Handler."""
-	mcp = FastMCP("shard", json_response=True)
+	mcp = FastMCP("shard", json_response=True, host=host, port=port)
 
 	# ---- Tools ----
 

@@ -80,6 +80,11 @@ class Handler:
 			self.model = ShardMPNN(self.cfg)
 			self.shard = ShardLayer(self.cfg.hidden_dim)
 
+		# Bootstrap base model on first run if missing
+		if not load_base_model(self.model, self.cfg):
+			save_base_model(self.model, self.cfg)
+			log.info("Bootstrapped base model: %s", self.cfg.base_gnn_path or "~/.config/shard/base.gnn")
+
 		self.trainer = GNNTrainer(self.model, self.shard, self.cfg)
 		self.ingester = Ingester(self.graph, self.provider, self.cfg)
 
@@ -146,13 +151,8 @@ class Handler:
 			if self.cfg.decay_coefficient > 0:
 				self.graph.apply_edge_decay(self.cfg.decay_coefficient)
 			if result.committed and self.graph.num_edges > 0:
-				# Reload base model (may have been updated by Shard training)
-				load_base_model(self.model)
-				loss, routing = self.trainer.train_on_graph_with_routing(self.graph)
+				loss, _ = self.trainer.train_on_graph_with_routing(self.graph)
 				log.info("GNN training loss: %.4f", loss)
-				# Merge Shard routing knowledge into base for cross-Shard navigation
-				if routing:
-					save_base_model(self.model, self.cfg, routing)
 			self.save()
 		self._fire_event(
 			GraphEvent(
@@ -585,6 +585,65 @@ class Handler:
 
 		return {"nodes": nodes, "edges": edges, "knn_edges": knn_edges}
 
+	def graph_meta(self) -> dict:
+		"""Lightweight snapshot: shard hub nodes + total thought count for fast initial render."""
+		nodes = []
+		edges = []
+		seen: set[tuple[str, str]] = set()
+		total = self.graph.num_thoughts
+		for name, shard in self._shards.items():
+			total += shard.graph.num_thoughts
+			hub_key = f"_shard:{name}"
+			nodes.append({
+				"key": hub_key,
+				"label": name,
+				"source": "",
+				"store": name,
+				"type": "shard",
+				"access_count": 0,
+				"created_at": 0,
+			})
+			for t in shard.graph.thoughts.values():
+				ek = (hub_key, f"{name}:{t.id}")
+				if ek not in seen:
+					seen.add(ek)
+					edges.append({
+						"source": hub_key,
+						"target": f"{name}:{t.id}",
+						"weight": 0.3,
+						"reasoning": f"belongs to {name}",
+						"success_rate": 0.0,
+					})
+		return {"nodes": nodes, "edges": edges, "knn_edges": [], "total_thoughts": total}
+
+	def graph_thoughts(self, offset: int = 0, limit: int = 200) -> dict:
+		"""Paginated thought nodes from global graph and all shards."""
+		all_nodes = []
+		for t in sorted(self.graph.thoughts.values(), key=lambda t: t.id):
+			all_nodes.append({
+				"key": str(t.id),
+				"label": t.text[:80],
+				"source": t.source,
+				"store": "global",
+				"type": "thought",
+				"access_count": t.access_count,
+				"created_at": t.created_at,
+				"last_accessed": t.last_accessed,
+			})
+		for name, shard in sorted(self._shards.items()):
+			for t in sorted(shard.graph.thoughts.values(), key=lambda t: t.id):
+				all_nodes.append({
+					"key": f"{name}:{t.id}",
+					"label": t.text[:80],
+					"source": t.source,
+					"store": name,
+					"type": "thought",
+					"access_count": t.access_count,
+					"created_at": t.created_at,
+					"last_accessed": t.last_accessed,
+				})
+		return {"nodes": all_nodes[offset : offset + limit]}
+
 	def _relink_thoughts(self, graph: Graph, thought_ids: list[int]) -> tuple[int, int]:
 		"""Relink only the specified thought IDs against all existing thoughts.
 
@@ -964,6 +1023,33 @@ class Handler:
 
 	def _load_shards(self):
 		"""Load all registered shards into cache, build index, and upsert registry nodes."""
+		# Auto-discover .shard files in the shard directory that aren't yet registered
+		shard_dir = Path(self.cfg.graph_path).parent
+		if shard_dir.is_dir():
+			from .shard.store import read_shard_metadata as _read_meta
+			registered_paths = {Path(e["path"]).resolve() for e in self.registry.stores.values()}
+			skip = {Path(self.cfg.graph_path).resolve()}
+			if self.cfg.base_gnn_path:
+				skip.add(Path(self.cfg.base_gnn_path).resolve())
+			# Also skip base.shard — it's the PyTorch base model, not a graph shard
+			skip.add((shard_dir / "base.shard").resolve())
+			for shard_file in shard_dir.glob("*.shard"):
+				resolved = shard_file.resolve()
+				if resolved in skip:
+					continue
+				if resolved in registered_paths:
+					continue
+				try:
+					_read_meta(str(resolved))  # validates it's a real graph shard
+				except Exception:
+					log.debug("Skipping non-graph file: %s", shard_file.name)
+					continue
+				try:
+					self.registry.register(str(resolved))
+					log.info("Auto-registered shard: %s", shard_file.name)
+				except Exception:
+					log.warning("Failed to auto-register %s", shard_file, exc_info=True)
+
 		stale: list[str] = []
 		for name, entry in self.registry.stores.items():
 			try:

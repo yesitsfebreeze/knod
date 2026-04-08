@@ -26,8 +26,6 @@
 			--font-ui: 'Outfit', sans-serif;
 			--font-mono: 'JetBrains Mono', monospace;
 			--ease: cubic-bezier(0.16, 1, 0.3, 1);
-			--reveal-opacity: 0.75;
-			/* 0–1: intensity of the blob reveal */
 		}
 
 		*,
@@ -55,21 +53,7 @@
 
 		/* ── Background layers ───────────────────────────────────────────── */
 
-		/* Layer 0: blurred image — revealed by the mask hole in #glass-overlay */
-		#bg-image {
-			position: fixed;
-			inset: -100px;
-			/* overshoot to hide blur edges */
-			z-index: 0;
-			pointer-events: none;
-			background-size: cover;
-			background-position: center;
-			background-repeat: no-repeat;
-			filter: blur(80px);
-			opacity: var(--reveal-opacity);
-		}
-
-		/* cross plusses — black, in front of the glass */
+/* cross plusses — black, in front of the glass */
 		body::after {
 			content: '';
 			position: fixed;
@@ -81,18 +65,16 @@
 			opacity: 0.5;
 		}
 
-		/* Layer 1: solid dark cover — hole punched by JS reveals #bg-image beneath */
-		#glass-overlay {
+		#gpu-canvas {
 			position: fixed;
 			inset: 0;
-			z-index: 1;
+			width: 100%;
+			height: 100%;
+			z-index: 0;
 			pointer-events: none;
-			background: #07090F;
-			mask-image: radial-gradient(circle 260px at 50% 50%, transparent 30%, black 85%);
-			-webkit-mask-image: radial-gradient(circle 260px at 50% 50%, transparent 30%, black 85%);
 		}
 
-		/* ── Layout ──────────────────────────────────────────────────────── */
+/* ── Layout ──────────────────────────────────────────────────────── */
 		#app {
 			position: relative;
 			z-index: 3;
@@ -202,50 +184,6 @@
 
 		.message--assistant .message__body {
 			border-radius: 18px 18px 18px 4px;
-		}
-
-		/* Thinking dots */
-		.message--thinking .message__body {
-			padding: 16px 22px;
-		}
-
-		.thinking-dots {
-			display: flex;
-			gap: 6px;
-			align-items: center;
-			height: 16px;
-		}
-
-		.thinking-dots span {
-			width: 6px;
-			height: 6px;
-			border-radius: 50%;
-			background: var(--accent);
-			opacity: 0.45;
-			animation: dot 1.2s ease-in-out infinite;
-		}
-
-		.thinking-dots span:nth-child(2) {
-			animation-delay: 0.15s;
-		}
-
-		.thinking-dots span:nth-child(3) {
-			animation-delay: 0.30s;
-		}
-
-		@keyframes dot {
-
-			0%,
-			60%,
-			100% {
-				transform: translateY(0);
-				opacity: 0.35;
-			}
-
-			30% {
-				transform: translateY(-6px);
-				opacity: 1;
-			}
 		}
 
 		/* Sources */
@@ -360,32 +298,87 @@
 			height: 42px;
 			border-radius: 13px;
 			border: none;
-			background: var(--accent);
-			color: #07090F;
+			background: transparent;
 			cursor: pointer;
+			position: relative;
+		}
+
+		#send::before {
+			content: '';
+			position: absolute;
+			inset: 0;
+			border-radius: 13px;
+			background: var(--accent);
+			transition: transform 0.5s var(--ease), opacity 0.4s var(--ease), border-radius 0.45s var(--ease);
+			pointer-events: none;
+		}
+
+		#send:hover::before { background: #7AABFF; }
+		#send:active::before { transform: scale(0.93); }
+
+		#send.loading::before,
+		#send.loading:hover::before {
+			transform: scale(0);
+			opacity: 0;
+			border-radius: 50%;
+		}
+
+		#send.loading { cursor: default; }
+
+		#send.loading:hover .send-icon--spinner {
+			transform: scale(0.65);
+			opacity: 0.6;
+		}
+
+		.send-icon {
+			position: absolute;
+			inset: 0;
 			display: flex;
 			align-items: center;
 			justify-content: center;
-			transition: background 0.2s, transform 0.15s;
+			transition: opacity 0.35s var(--ease), transform 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
 		}
 
-		#send:hover {
-			background: #7AABFF;
-			transform: scale(1.04);
+		.send-icon--arrow { color: #07090F; }
+
+		.send-icon--spinner {
+			opacity: 0;
+			transform: scale(0.05);
+			color: var(--accent);
 		}
 
-		#send:active {
-			transform: scale(0.95);
+		#send.loading .send-icon--arrow {
+			opacity: 0;
+			transform: scale(0.05);
 		}
 
-		#send:disabled {
-			background: var(--glass-border);
-			opacity: 0.45;
-			cursor: not-allowed;
-			transform: none;
+		#send.loading .send-icon--spinner {
+			opacity: 1;
+			transform: scale(1);
 		}
 
-		/* Session row */
+		#send.loading .send-icon--spinner svg {
+			animation: arc-spin 1.4s linear infinite;
+		}
+
+		#send.loading .send-icon--spinner circle {
+			animation: arc-breathe 2s cubic-bezier(0.37, 0, 0.63, 1) infinite;
+		}
+
+		@keyframes arc-spin {
+			to { transform: rotate(360deg); }
+		}
+
+		@keyframes arc-breathe {
+			0%   { stroke-dasharray: 24 16; stroke-dashoffset: 0;   opacity: 0.75; }
+			20%  { stroke-dasharray: 38 2;  stroke-dashoffset: -8;  opacity: 1; }
+			35%  { stroke-dasharray: 16 24; stroke-dashoffset: -4;  opacity: 0.35; }
+			55%  { stroke-dasharray: 34 6;  stroke-dashoffset: -10; opacity: 0.9; }
+			70%  { stroke-dasharray: 20 20; stroke-dashoffset: -3;  opacity: 0.4; }
+			100% { stroke-dasharray: 24 16; stroke-dashoffset: 0;   opacity: 0.75; }
+		}
+
+				/* Session row */
 		#session-row {
 			display: flex;
 			align-items: center;
@@ -408,24 +401,38 @@
 
 		#session-new {
 			margin-left: auto;
+			pointer-events: auto;
+			cursor: pointer;
+			transition: color 0.2s;
+		}
+
+		#session-new:hover {
+			color: var(--text-muted);
 		}
 	</style>
 </head>
 
 <body>
-	<div id="bg-image"></div>
-	<div id="glass-overlay"></div>
-	<div id="app">
+<canvas id="gpu-canvas"></canvas>
+<div id="app">
 		<div id="messages"></div>
 
 		<div id="input-area">
 			<div id="input-glass">
 				<textarea id="input" rows="1" placeholder="Ask anything…" autocomplete="off" spellcheck="false"></textarea>
 				<button id="send">
-					<svg width="18" height="18" viewBox="0 0 18 18" fill="none">
-						<path d="M2 9h14M10 3l6 6-6 6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"
-							stroke-linejoin="round" />
-					</svg>
+					<span class="send-icon send-icon--arrow">
+						<svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+							<path d="M2 9h14M10 3l6 6-6 6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"
+								stroke-linejoin="round" />
+						</svg>
+					</span>
+					<span class="send-icon send-icon--spinner">
+						<svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+							<circle cx="9" cy="9" r="6.5" stroke="currentColor" stroke-width="1.7"
+								stroke-linecap="round" stroke-dasharray="26 14" />
+						</svg>
+					</span>
 				</button>
 			</div>
 			<div id="session-row">
@@ -439,8 +446,8 @@
 	<script type="module">
 		// ── Config ──────────────────────────────────────────────────────────
 		const Config = Object.freeze({
-			endpoints: { ask: '/ask', chat: '/chat' },
-			backend: 'ask',
+			endpoints: { ask: '/ask', chat: '/chat', agent: '/agent' },
+			backend: 'agent',
 		});
 
 		// ── API ─────────────────────────────────────────────────────────────
@@ -456,7 +463,14 @@
 			},
 			ask(query) { return this._post(Config.endpoints.ask, { query }); },
 			chat(messages, opts = {}) { return this._post(Config.endpoints.chat, { messages, ...opts }); },
+			agent(message, sessionId = null) {
+				return this._post(Config.endpoints.agent, { message, session_id: sessionId });
+			},
 			query(text, sessionCtx = null) {
+				if (Config.backend === 'agent') {
+					return this.agent(text, sessionCtx?.serverSessionId)
+						.then(d => ({ answer: d.content, sources: [], serverSessionId: d.session_id }));
+				}
 				if (Config.backend === 'chat') {
 					const msgs = sessionCtx?.history ?? [{ role: 'user', content: text }];
 					return this.chat(msgs).then(d => ({ answer: d.content, sources: [] }));
@@ -471,7 +485,7 @@
 			activeId: null,
 			get active() { return this.sessions.get(this.activeId); },
 			createSession(id = crypto.randomUUID()) {
-				this.sessions.set(id, { id, title: null, createdAt: Date.now(), messages: [] });
+				this.sessions.set(id, { id, title: null, createdAt: Date.now(), messages: [], serverSessionId: null });
 				return id;
 			},
 			setActive(id) {
@@ -527,17 +541,6 @@
 				return el;
 			},
 
-			createThinking() {
-				const el = document.createElement('div');
-				el.className = 'message message--assistant message--thinking';
-				el.innerHTML = `
-					<div class="message__role">shard</div>
-					<div class="message__body">
-						<div class="thinking-dots"><span></span><span></span><span></span></div>
-					</div>`;
-				requestAnimationFrame(() => requestAnimationFrame(() => el.classList.add('message--visible')));
-				return el;
-			},
 		};
 
 		// ── UI ──────────────────────────────────────────────────────────────
@@ -547,7 +550,22 @@
 				this.messagesEl = document.getElementById('messages');
 				this.inputEl = document.getElementById('input');
 				this.sendEl = document.getElementById('send');
+				this.sessionNameEl = document.getElementById('session-name');
 				this.inputEl.addEventListener('input', () => this._resize());
+				document.getElementById('session-new').addEventListener('click', () => {
+					State.setActive(State.createSession());
+					this.messagesEl.innerHTML = '';
+					this.appEl.classList.remove('chat-active');
+					App.started = false;
+					this.updateSessionDisplay(null);
+					this.inputEl.focus();
+				});
+				this.updateSessionDisplay(null);
+			},
+			updateSessionDisplay(serverSessionId) {
+				this.sessionNameEl.textContent = serverSessionId
+					? serverSessionId.slice(0, 8) + '…'
+					: 'new';
 			},
 			_resize() {
 				this.inputEl.style.height = 'auto';
@@ -562,27 +580,28 @@
 				this._scroll();
 				return el;
 			},
-			showThinking() {
-				const el = MessageComponent.createThinking();
-				this.messagesEl.appendChild(el);
-				this._scroll();
-				return el;
-			},
-			removeThinking(el) { el?.remove(); },
+			showThinking() {},
+			removeThinking(_el) {},
 			_scroll() {
 				this.messagesEl.scrollTo({ top: this.messagesEl.scrollHeight, behavior: 'smooth' });
 			},
 			setLoading(v) {
-				this.sendEl.disabled = v;
 				this.inputEl.disabled = v;
-				if (!v) { this.inputEl.focus(); this._resize(); }
+				if (v) {
+					this.sendEl.classList.add('loading');
+				} else {
+					this.sendEl.classList.remove('loading');
+					this.inputEl.focus();
+					this._resize();
+				}
 			},
 			getInput() { return this.inputEl.value.trim(); },
 			clearInput() { this.inputEl.value = ''; this.inputEl.style.height = 'auto'; },
 			onSend(fn) {
-				this.sendEl.addEventListener('click', fn);
+				const guard = () => { if (!this.sendEl.classList.contains('loading')) fn(); };
+				this.sendEl.addEventListener('click', guard);
 				this.inputEl.addEventListener('keydown', e => {
-					if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); fn(); }
+					if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); guard(); }
 				});
 			},
 		};
@@ -614,8 +633,12 @@
 				const thinking = UI.showThinking();
 
 				try {
-					const result = await API.query(text, { history: State.chatHistory() });
+					const result = await API.query(text, State.active);
 					UI.removeThinking(thinking);
+					if (result.serverSessionId) {
+						State.active.serverSessionId = result.serverSessionId;
+						UI.updateSessionDisplay(result.serverSessionId);
+					}
 					const reply = State.addMessage({
 						role: 'assistant',
 						content: result.answer ?? result.content ?? '—',
@@ -634,70 +657,189 @@
 
 		App.init();
 
-		// ── Random Pexels background ────────────────────────────────────────
-		const BG_IMAGES = [
-			// 'https://images.pexels.com/photos/18337612/pexels-photo-18337612.jpeg?auto=compress&cs=tinysrgb&w=1920', // neon cyber grid city
-			// 'https://images.pexels.com/photos/3251991/pexels-photo-3251991.jpeg?auto=compress&cs=tinysrgb&w=1920',  // rainy nights city lights
-			// 'https://images.pexels.com/photos/1526/dark-blur-blurred-gradient.jpg?auto=compress&cs=tinysrgb&w=1920', // dark gradient blur
-			// 'https://images.pexels.com/photos/15578335/pexels-photo-15578335.png?auto=compress&cs=tinysrgb&w=1920',  // moody warm abstract
-			// 'https://images.pexels.com/photos/29576128/pexels-photo-29576128.jpeg?auto=compress&cs=tinysrgb&w=1920', // bw bridge night
-			'https://images.pexels.com/photos/2080960/pexels-photo-2080960.jpeg?auto=compress&cs=tinysrgb&w=1920', // bw bridge night
-		];
-		const pick = BG_IMAGES[Math.floor(Math.random() * BG_IMAGES.length)];
-		document.getElementById('bg-image').style.backgroundImage = `url('${pick}')`;
-
-		// ── Reveal-hole tracking ────────────────────────────────────────────
-		const glassEl = document.getElementById('glass-overlay');
-		const bgEl = document.getElementById('bg-image');
-		const BLOB_R = 900;
-		const BASE_OPACITY = parseFloat(
-			getComputedStyle(document.documentElement).getPropertyValue('--reveal-opacity')
-		) || 0.75;
-		const FADE_START = 200, FADE_END = 40;
-
-		let bx = window.innerWidth / 2, by = window.innerHeight / 2;
-		let tx = bx, ty = by;
-		let currentOpacity = BASE_OPACITY;
-		let currentR = BLOB_R;
-
-		document.addEventListener('mousemove', e => { tx = e.clientX; ty = e.clientY; });
-
-		function distToRect(x, y, rect) {
-			const dx = Math.max(rect.left - x, 0, x - rect.right);
-			const dy = Math.max(rect.top - y, 0, y - rect.bottom);
-			return Math.hypot(dx, dy);
+		// ── Helpers ─────────────────────────────────────────────────────────
+		function hslToRgb(h, s, l) {
+			const a = s * Math.min(l, 1 - l);
+			const f = n => { const k = (n + h / 30) % 12; return l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1)); };
+			return [f(0), f(8), f(4)];
 		}
 
-		function nearestInteractable(x, y) {
-			const els = document.querySelectorAll('button, textarea, input, a, [tabindex]');
+		// ── Mouse / reveal state ─────────────────────────────────────────────
+		const REVEAL_R = 380, FADE_START = 200, FADE_END = 40;
+		let mx = window.innerWidth / 2, my = window.innerHeight / 2;
+		let bx = mx, by = my, currentR = REVEAL_R;
+
+		document.addEventListener('mousemove', e => { mx = e.clientX; my = e.clientY; });
+
+		function nearestUI(x, y) {
 			let min = Infinity;
-			els.forEach(el => {
-				const d = distToRect(x, y, el.getBoundingClientRect());
+			document.querySelectorAll('button,textarea,input,a,[tabindex]').forEach(el => {
+				const r = el.getBoundingClientRect();
+				const d = Math.hypot(Math.max(r.left - x, 0, x - r.right), Math.max(r.top - y, 0, y - r.bottom));
 				if (d < min) min = d;
 			});
 			return min;
 		}
 
-		(function lerp() {
-			bx += (tx - bx) * 0.08;
-			by += (ty - by) * 0.08;
+		// ── Blob state ───────────────────────────────────────────────────────
+		const NUM_BLOBS = 7;
+		const blobs = Array.from({ length: NUM_BLOBS }, (_, i) => ({
+			x: 0.1 + Math.random() * 0.8, y: 0.1 + Math.random() * 0.8,
+			vx: (Math.random() - 0.5) * 0.00060,
+			vy: (Math.random() - 0.5) * 0.00060,
+			baseRadius: 0.10 + Math.random() * 0.20,
+			phase: Math.random() * Math.PI * 2,
+			hue: (i / NUM_BLOBS) * 360,
+			hueSpeed: 0.007 + Math.random() * 0.010,
+		}));
 
-			const dist = nearestInteractable(bx, by);
-			// t=1 far away, t=0 right on element — both opacity and size go to half at t=0
-			const t = Math.min(Math.max((dist - FADE_END) / (FADE_START - FADE_END), 0), 1);
-			const targetOpacity = BASE_OPACITY * (0.5 + 0.5 * t);
-			const targetR = BLOB_R * (0.5 + 0.5 * t);
+		function stepBlobs() {
+			for (const b of blobs) {
+				b.x += b.vx; b.y += b.vy;
+				if (b.x < 0.04 || b.x > 0.96) b.vx *= -1;
+				if (b.y < 0.04 || b.y > 0.96) b.vy *= -1;
+				b.hue = (b.hue + b.hueSpeed) % 360;
+			}
+		}
 
-			currentOpacity += (targetOpacity - currentOpacity) * 0.08;
-			currentR += (targetR - currentR) * 0.08;
+		// ── WebGPU ──────────────────────────────────────────────────────────
+		const gpuCanvas = document.getElementById('gpu-canvas');
 
-			bgEl.style.opacity = currentOpacity;
-			const mask = `radial-gradient(circle ${currentR}px at ${bx}px ${by}px, transparent 0%, black 100%)`;
-			glassEl.style.maskImage = mask;
-			glassEl.style.webkitMaskImage = mask;
+		const WGSL = `
+struct Uniforms { resolution: vec2<f32>, mouse: vec2<f32>, reveal_r: f32, time: f32 }
+struct Blob     { pos: vec2<f32>, radius: f32, _p: f32, color: vec4<f32> }
+@group(0) @binding(0) var<uniform>       u     : Uniforms;
+@group(0) @binding(1) var<storage, read> blobs : array<Blob>;
 
-			requestAnimationFrame(lerp);
-		})();
+@vertex fn vs(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
+  var p = array<vec2<f32>,3>(vec2(-1.,-1.), vec2(3.,-1.), vec2(-1.,3.));
+  return vec4<f32>(p[vi], 0., 1.);
+}
+
+fn hash(px: vec2<f32>, t: f32) -> f32 {
+  let q = vec3<f32>(px * 0.013, t);
+  return fract(sin(dot(q, vec3<f32>(127.1, 311.7, 74.7))) * 43758.5453);
+}
+
+@fragment fn fs(@builtin(position) fp: vec4<f32>) -> @location(0) vec4<f32> {
+  let px  = fp.xy;
+  var raw = vec3<f32>(0.);
+  let n   = arrayLength(&blobs);
+  for (var i = 0u; i < n; i++) {
+    let bpx  = blobs[i].pos * u.resolution;
+    let brad = blobs[i].radius * max(u.resolution.x, u.resolution.y);
+    let d    = length(px - bpx);
+    let t    = 1. - smoothstep(0., brad, d);
+    raw     += blobs[i].color.rgb * (t * t);
+  }
+  let col    = raw / (raw + vec3<f32>(1.));
+  let reveal = 1. - smoothstep(u.reveal_r * .70, u.reveal_r, length(px - u.mouse));
+  let bg     = vec3<f32>(0.02745, 0.03529, 0.05882);
+  var result = min(bg + col * reveal, vec3<f32>(1.));
+  let blob_mask = smoothstep(0.005, 0.05, length(raw));
+  let grain  = (hash(px, floor(u.time * 20.) / 20.) * 2. - 1.) * 0.045 * blob_mask * reveal;
+  return vec4<f32>(clamp(result + grain, vec3<f32>(0.), vec3<f32>(1.)), 1.0);
+}`;
+
+		async function tryWebGPU() {
+			if (!navigator.gpu) return null;
+			const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'low-power' }).catch(() => null);
+			if (!adapter) return null;
+			const device  = await adapter.requestDevice().catch(() => null);
+			if (!device)  return null;
+			const ctx     = gpuCanvas.getContext('webgpu');
+			if (!ctx)     return null;
+			const fmt     = navigator.gpu.getPreferredCanvasFormat();
+
+			function resize() {
+				gpuCanvas.width  = window.innerWidth;
+				gpuCanvas.height = window.innerHeight;
+				ctx.configure({ device, format: fmt, alphaMode: 'opaque' });
+			}
+			resize();
+			window.addEventListener('resize', resize);
+
+			const uBuf = device.createBuffer({ size: 32, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+			const bBuf = device.createBuffer({ size: NUM_BLOBS * 32, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+			const shader = device.createShaderModule({ code: WGSL });
+			const bgl    = device.createBindGroupLayout({ entries: [
+				{ binding: 0, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
+				{ binding: 1, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'read-only-storage' } },
+			]});
+			const pipeline = device.createRenderPipeline({
+				layout:    device.createPipelineLayout({ bindGroupLayouts: [bgl] }),
+				vertex:    { module: shader, entryPoint: 'vs' },
+				fragment:  { module: shader, entryPoint: 'fs', targets: [{ format: fmt }] },
+				primitive: { topology: 'triangle-list' },
+			});
+			const bg = device.createBindGroup({ layout: bgl, entries: [
+				{ binding: 0, resource: { buffer: uBuf } },
+				{ binding: 1, resource: { buffer: bBuf } },
+			]});
+
+			const blobData = new Float32Array(NUM_BLOBS * 8);
+			const uData    = new Float32Array(8);
+
+			return function renderGPU(ts) {
+				const W = gpuCanvas.width, H = gpuCanvas.height, tsS = ts * 0.001;
+				for (let i = 0; i < NUM_BLOBS; i++) {
+					const b = blobs[i];
+					const radius = Math.max(0.10, Math.min(0.30, b.baseRadius * (1 + 0.28 * Math.sin(tsS * 0.35 + b.phase))));
+					const [r, g, bl] = hslToRgb(b.hue, 0.78, 0.58);
+					const o = i * 8;
+					blobData[o]=b.x; blobData[o+1]=b.y; blobData[o+2]=radius; blobData[o+3]=0;
+					blobData[o+4]=r; blobData[o+5]=g; blobData[o+6]=bl; blobData[o+7]=1;
+				}
+				device.queue.writeBuffer(bBuf, 0, blobData);
+				uData[0]=W; uData[1]=H; uData[2]=bx; uData[3]=by; uData[4]=currentR; uData[5]=tsS;
+				device.queue.writeBuffer(uBuf, 0, uData);
+				const enc  = device.createCommandEncoder();
+				const pass = enc.beginRenderPass({ colorAttachments: [{
+					view: ctx.getCurrentTexture().createView(),
+					clearValue: { r: 0.02745, g: 0.03529, b: 0.05882, a: 1 }, loadOp: 'clear', storeOp: 'store',
+				}]});
+				pass.setPipeline(pipeline); pass.setBindGroup(0, bg); pass.draw(3); pass.end();
+				device.queue.submit([enc.finish()]);
+			};
+		}
+
+		// ── Canvas 2D fallback (no grain) ────────────────────────────────────
+		function initCanvas2D() {
+			const c = gpuCanvas.getContext('2d');
+			gpuCanvas.style.filter = 'blur(60px)';
+			function resize() { gpuCanvas.width = window.innerWidth; gpuCanvas.height = window.innerHeight; }
+			resize();
+			window.addEventListener('resize', resize);
+			return function render2D(ts) {
+				const W = gpuCanvas.width, H = gpuCanvas.height, tsS = ts * 0.001;
+				c.fillStyle = '#07090F'; c.fillRect(0, 0, W, H);
+				for (const b of blobs) {
+					const cx = b.x * W, cy = b.y * H;
+					const brad = Math.max(0.10, Math.min(0.30, b.baseRadius * (1 + 0.28 * Math.sin(tsS * 0.35 + b.phase)))) * Math.max(W, H);
+					const g = c.createRadialGradient(cx, cy, 0, cx, cy, brad);
+					g.addColorStop(0, `hsla(${b.hue},78%,60%,.85)`);
+					g.addColorStop(0.5, `hsla(${b.hue},70%,50%,.40)`);
+					g.addColorStop(1, `hsla(${b.hue},60%,40%,.00)`);
+					c.fillStyle = g; c.fillRect(0, 0, W, H);
+				}
+				c.globalCompositeOperation = 'destination-in';
+				const rm = c.createRadialGradient(bx, by, currentR * 0.70, bx, by, currentR);
+				rm.addColorStop(0, 'rgba(0,0,0,1)'); rm.addColorStop(1, 'rgba(0,0,0,0)');
+				c.fillStyle = rm; c.fillRect(0, 0, W, H);
+				c.globalCompositeOperation = 'source-over';
+			};
+		}
+
+		// ── Tick ─────────────────────────────────────────────────────────────
+		const renderFn = await tryWebGPU() ?? initCanvas2D();
+		(function tick(ts) {
+			bx += (mx - bx) * 0.08; by += (my - by) * 0.08;
+			const t = Math.min(Math.max((nearestUI(bx, by) - FADE_END) / (FADE_START - FADE_END), 0), 1);
+			currentR += (REVEAL_R * (0.25 + 0.75 * t) - currentR) * 0.08;
+			stepBlobs();
+			renderFn(ts);
+			requestAnimationFrame(tick);
+		})(0);
 	</script>
 </body>
 

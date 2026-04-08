@@ -295,7 +295,7 @@ body.ask-open .query-hint {
 
 .ask-stack {
   display: flex;
-  flex-direction: column-reverse;
+  flex-direction: column;
   gap: 12px;
   margin-bottom: 12px;
   pointer-events: none;

@@ -2,6 +2,8 @@ import hashlib
 import logging
 from pathlib import Path
 
+from .shard.store import read_shard_metadata
+
 log = logging.getLogger(__name__)
 
 
@@ -22,10 +24,7 @@ class Registry:
 
 	def _read_metadata(self, path: str) -> dict | None:
 		try:
-			from .shard.store import read_shard_metadata
-
-			meta = read_shard_metadata(path)
-			return meta
+			return read_shard_metadata(path)
 		except Exception:
 			log.warning("Failed to read metadata from %s", path, exc_info=True)
 			return None

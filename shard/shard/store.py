@@ -187,13 +187,7 @@ def merge_routing_into_base(model, routing: dict):
 				proj = F.relu(model.node_proj(profile_tensor.unsqueeze(0)))
 				blended = 0.7 * proj.squeeze(0) + 0.3 * avg_hidden[:hidden_dim]
 
-				for layer in model.layers:
-					blended = layer(
-						blended.unsqueeze(0),
-						torch.tensor([[0]], dtype=torch.long),
-						torch.zeros(1, hidden_dim, dtype=torch.float),
-					)
-					blended = blended.squeeze(0)
+				# Single-node graph: no edges to propagate, skip GNN layers
 
 				noise = torch.randn_like(blended) * 0.001
 				blended = blended + noise
@@ -216,7 +210,9 @@ def load_base_model(model: ShardMPNN, cfg=None) -> bool:
 	"""Load the shared base MPNN. Returns True if loaded."""
 	path = _get_base_gnn_path(cfg) if cfg else _DEFAULT_BASE_GNN_PATH
 	if not path.exists():
+		log.info("Base model not found: %s", path.resolve())
 		return False
+	log.info("Loading base model: %s", path.resolve())
 	checkpoint = torch.load(path, weights_only=True)
 	model.load_state_dict(checkpoint["model"])
 	return True
@@ -236,9 +232,10 @@ def load_all(cfg, base_path: str | Path) -> tuple[Graph, ShardMPNN, ShardLayer]:
 	shard_path = base.with_suffix(".shard")
 
 	if shard_path.exists():
+		log.info("Loading shard: %s", shard_path.resolve())
 		return load_shard(cfg, shard_path)
 
-	raise FileNotFoundError(f"No .shard file at {base}")
+	raise FileNotFoundError(f"No .shard file at {shard_path.resolve()}")
 
 
 # --- .shard unified format ---
@@ -370,10 +367,15 @@ def load_shard(cfg, path: str | Path, warm_start: bool = True) -> tuple[Graph, S
 		load_base_model(model, cfg)
 
 	if model_bytes:
-		buf = io.BytesIO(model_bytes)
-		checkpoint = torch.load(buf, weights_only=True)
-		model.load_state_dict(checkpoint["model"])
-		shard.load_state_dict(checkpoint["shard"])
+		try:
+			buf = io.BytesIO(model_bytes)
+			checkpoint = torch.load(buf, weights_only=True)
+			model.load_state_dict(checkpoint["model"])
+			shard.load_state_dict(checkpoint["shard"])
+		except (RuntimeError, Exception) as e:
+			log.warning("Checkpoint corrupt or unreadable (%s); falling back to base model.", e)
+			if not warm_start:
+				load_base_model(model, cfg)
 	elif not warm_start:
 		load_base_model(model)
 

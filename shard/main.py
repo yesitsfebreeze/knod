@@ -22,10 +22,25 @@ def main():
 	serve_cmd.add_argument("--graph", type=str, default=None)
 	serve_cmd.add_argument("--no-http", action="store_true", help="Disable HTTP")
 	serve_cmd.add_argument("--no-tcp", action="store_true", help="Disable TCP")
-	serve_cmd.add_argument("--no-mcp", action="store_true", help="Disable MCP (stdio)")
+	serve_cmd.add_argument("--no-mcp", action="store_true", help="Disable MCP")
+	serve_cmd.add_argument(
+		"--mcp-transport",
+		choices=["stdio", "sse", "streamable-http"],
+		default="stdio",
+		help="MCP transport (default: stdio)",
+	)
+	serve_cmd.add_argument("--mcp-port", type=int, default=None, help="MCP HTTP/SSE port (default: mcp_port in config)")
 
-	# mcp — standalone MCP server (stdio only, for use in MCP client configs)
-	sub.add_parser("mcp", help="Run as MCP stdio server")
+	# mcp — standalone MCP server
+	mcp_cmd = sub.add_parser("mcp", help="Run as standalone MCP server")
+	mcp_cmd.add_argument(
+		"--transport",
+		choices=["stdio", "sse", "streamable-http"],
+		default="stdio",
+		help="Transport to use (default: stdio)",
+	)
+	mcp_cmd.add_argument("--port", type=int, default=None, help="Port for HTTP/SSE transport")
+	mcp_cmd.add_argument("--host", type=str, default="127.0.0.1", help="Host for HTTP/SSE transport")
 
 	# ingest
 	ingest_cmd = sub.add_parser("ingest", help="Ingest a text file")
@@ -98,7 +113,7 @@ def main():
 		_do_serve(cfg, args)
 
 	elif args.command == "mcp":
-		_do_mcp_stdio(cfg)
+		_do_mcp(cfg, args)
 
 	elif args.command == "ingest":
 		_do_ingest_file(cfg, args.file, args.descriptor, cluster=getattr(args, "cluster", None))
@@ -148,22 +163,27 @@ def _do_serve(cfg: Config, args):
 
 		tcp_server = _tcp(handler, port=cfg.tcp_port)
 
-	# MCP stdio (background thread)
+	# MCP (background thread — all transports run here so HTTP can own the main thread)
 	mcp_thread = None
 	if not args.no_mcp:
 		from .protocol import _mcp
 
-		mcp_server = _mcp(handler)
+		mcp_transport = args.mcp_transport
+		mcp_port = args.mcp_port or cfg.mcp_port
+		mcp_server = _mcp(handler, port=mcp_port)
 
 		def run_mcp():
 			try:
-				mcp_server.run(transport="stdio")
+				mcp_server.run(transport=mcp_transport)
 			except Exception:
 				log.exception("MCP server exited")
 
 		mcp_thread = threading.Thread(target=run_mcp, daemon=True)
 		mcp_thread.start()
-		log.info("mcp: stdio transport active")
+		if mcp_transport == "stdio":
+			log.info("mcp: stdio transport active")
+		else:
+			log.info("mcp: %s transport active on :%d", mcp_transport, mcp_port)
 
 	# HTTP (blocks on main thread via uvicorn)
 	if not args.no_http:
@@ -207,15 +227,22 @@ def _do_serve(cfg: Config, args):
 	handler.shutdown()
 
 
-def _do_mcp_stdio(cfg: Config):
-	"""Run standalone MCP server over stdio (for MCP client configs)."""
+def _do_mcp(cfg: Config, args):
+	"""Run standalone MCP server (stdio, sse, or streamable-http)."""
 	from .handler import Handler
 	from .protocol import _mcp
 
+	transport = getattr(args, "transport", "stdio")
+	port = getattr(args, "port", None) or cfg.mcp_port
+	host = getattr(args, "host", "127.0.0.1")
+
 	handler = Handler(cfg)
 	handler.init()
-	mcp = _mcp(handler)
-	mcp.run(transport="stdio")
+	mcp = _mcp(handler, host=host, port=port)
+	if transport != "stdio":
+		log = logging.getLogger(__name__)
+		log.info("mcp: %s transport on http://%s:%d/mcp", transport, host, port)
+	mcp.run(transport=transport)
 
 
 def _load_handler(cfg: Config):

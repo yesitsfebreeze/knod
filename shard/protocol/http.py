@@ -1,6 +1,8 @@
 """FastAPI HTTP server — delegates to shared Handler."""
 
 import logging
+import threading
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -10,6 +12,57 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from ..handler import Handler
+
+
+class SessionStore:
+	def __init__(self):
+		self._lock = threading.Lock()
+		self._sessions: dict[str, list[dict]] = {}
+
+	def get(self, session_id: str) -> list[dict] | None:
+		with self._lock:
+			msgs = self._sessions.get(session_id)
+			return list(msgs) if msgs is not None else None
+
+	def get_or_create(self, session_id: str) -> list[dict]:
+		with self._lock:
+			if session_id not in self._sessions:
+				self._sessions[session_id] = []
+			return list(self._sessions[session_id])
+
+	def set(self, session_id: str, messages: list[dict]) -> None:
+		with self._lock:
+			self._sessions[session_id] = messages
+
+	def list_ids(self) -> list[str]:
+		with self._lock:
+			return list(self._sessions.keys())
+
+	def delete(self, session_id: str) -> bool:
+		with self._lock:
+			return bool(self._sessions.pop(session_id, None))
+
+
+def _build_system_prompt(handler: "Handler") -> str:
+	info = handler.graph_info
+	purpose = info.get("purpose", "")
+	descriptors = info.get("descriptors", {})
+	stats = handler.graph_stats()
+	lines = [
+		"You are a shard AI assistant with access to a persistent knowledge graph memory.",
+		f"The graph currently holds {stats.get('thoughts', 0)} thoughts and {stats.get('edges', 0)} edges.",
+	]
+	if purpose:
+		lines.append(f"Shard purpose: {purpose}")
+	if descriptors:
+		lines.append(f"Knowledge domains: {', '.join(descriptors.keys())}")
+	lines += [
+		"",
+		"Use your tools proactively — search memory before answering, ingest new information when asked.",
+		"Tools: ask (semantic search + answer), find_thoughts (raw nodes), ingest_sync (add knowledge),",
+		"       explore_thought / traverse (navigate graph), graph_stats / list_shards (inspect state).",
+	]
+	return "\n".join(lines)
 
 log = logging.getLogger(__name__)
 
@@ -67,6 +120,17 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
 	content: str
+	tool_calls: list[dict] | None = None
+
+
+class AgentRequest(BaseModel):
+	message: str
+	session_id: str | None = None
+
+
+class AgentResponse(BaseModel):
+	content: str
+	session_id: str
 	tool_calls: list[dict] | None = None
 
 
@@ -138,11 +202,10 @@ class ChatToolHandler:
 	def list_descriptors(self) -> dict:
 		return {"descriptors": self._handler.graph_info.get("descriptors", {})}
 
-	def create_shard(self, name: str, purpose: str, location: str = "", knid: str | None = None) -> dict:
-		"""Create a new shard and register it."""
-		location = location or self._handler.cfg.store_path
-		path = self._handler.create_shard(name, purpose, location, knid=knid)
-		return {"name": name, "purpose": purpose, "path": path, "knid": knid}
+	def create_shard(self, name: str, purpose: str, cluster: str | None = None) -> dict:
+		"""Create a new shard alongside the main graph."""
+		path = self._handler.create_shard(name, purpose, cluster=cluster)
+		return {"name": name, "purpose": purpose, "path": path}
 
 	def ingest_into_shard(self, shard_name: str, text: str, source: str = "", descriptor: str = "") -> dict:
 		"""Ingest text directly into a named shard."""
@@ -264,6 +327,14 @@ def http(handler: Handler) -> FastAPI:
 	def graph_full():
 		return handler.graph_full()
 
+	@app.get("/graph/meta")
+	def graph_meta():
+		return handler.graph_meta()
+
+	@app.get("/graph/thoughts")
+	def graph_thoughts(offset: int = 0, limit: int = 200):
+		return handler.graph_thoughts(offset=offset, limit=limit)
+
 	@app.post("/relink")
 	def relink():
 		return handler.relink()
@@ -296,6 +367,37 @@ def http(handler: Handler) -> FastAPI:
 
 		content, tool_calls = handler.provider.chat_with_tools(build_messages, tool_handler, **kwargs)
 		return ChatResponse(content=content, tool_calls=tool_calls or None)
+
+	_sessions = SessionStore()
+
+	@app.post("/agent", response_model=AgentResponse)
+	def agent(req: AgentRequest):
+		session_id = req.session_id or str(uuid.uuid4())
+		messages = _sessions.get_or_create(session_id)
+		if not messages:
+			messages.append({"role": "system", "content": _build_system_prompt(handler)})
+		messages.append({"role": "user", "content": req.message})
+		tool_handler = ChatToolHandler(handler)
+		content, tool_calls = handler.provider.chat_with_tools(messages, tool_handler)
+		messages.append({"role": "assistant", "content": content})
+		_sessions.set(session_id, messages)
+		return AgentResponse(content=content, session_id=session_id, tool_calls=tool_calls or None)
+
+	@app.get("/agent/sessions")
+	def list_agent_sessions():
+		return {"sessions": _sessions.list_ids()}
+
+	@app.get("/agent/session/{session_id}")
+	def get_agent_session(session_id: str):
+		msgs = _sessions.get(session_id)
+		if msgs is None:
+			from fastapi.responses import JSONResponse
+			return JSONResponse(status_code=404, content={"error": "Session not found"})
+		return {"session_id": session_id, "messages": msgs, "length": len(msgs)}
+
+	@app.delete("/agent/session/{session_id}")
+	def delete_agent_session(session_id: str):
+		return {"deleted": _sessions.delete(session_id), "session_id": session_id}
 
 	# Static files (CSS, JS) for the web UI
 	_web_dir = Path(__file__).resolve().parent.parent / "web"

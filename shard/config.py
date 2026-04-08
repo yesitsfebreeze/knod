@@ -55,6 +55,7 @@ class Config:
 
 	tcp_port: int = 7999
 	http_port: int = 8080
+	mcp_port: int = 8766
 
 	graph_path: str = ".shard/graph.shard"
 	base_gnn_path: str = ""

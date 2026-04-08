@@ -4,13 +4,62 @@ Last updated: 2026-04-05
 
 ## Vision
 
-Shard is an AI-native knowledge graph system. It ingests raw text, distills it into atomic thoughts, and organizes them in a relevance graph that a GNN learns to navigate. A single Odin executable runs as one process: it owns the graph, the GNN model, and the ingestion pipeline. When querying across multiple strands, the process spawns subprocesses of the same binary — each pointed at a different graph file — to retrieve in parallel. External LLMs (OpenAI) handle the expensive reasoning: decomposing text, evaluating connections, and generating answers from retrieved context. The result is an always-available knowledge store that specializes through MCMC acceptance gating and scales to many strands via subprocess fan-out.
+Shard is a network of self-organizing specialist agents. Each specialist is one knowledge graph plus one reasoning agent — small, focused, and cheap to run. Specialists do not call each other directly. Instead they broadcast their learned identity into the network as a tag cloud and emit signals when they need more information. Other specialists hear those signals and respond if their tags match. Intelligence is not in any one node — it lives in the network topology and the protocol that lets nodes find each other.
+
+The fundamental unit: `1 graph + 1 agent = 1 specialist`.
+
+Scaling means acquiring more specialists, not bigger models. A new specialist auto-integrates by broadcasting its tag cloud. No manual wiring required.
 
 ## Purpose
 
 People accumulate knowledge constantly — documents, notes, conversations — but have no good way to store it so it can be queried by meaning later. Search finds text matches. Databases find structured records. Neither understands relationships between ideas or can surface context for a question that doesn't use the same words as the stored information.
 
-Shard solves this by maintaining a graph of distilled thoughts linked by relevance. When asked a question, it doesn't just find the closest text match — it finds the most relevant thought and fans out along relationship edges to assemble context that a flat search would miss. The GNN makes retrieval fast and structure-aware; the external LLM makes the final answer accurate and reasoned.
+Shard solves this at two levels. Within a specialist: a graph of distilled thoughts linked by relevance, navigated by a GNN that learns the structure. Across specialists: a self-organizing network where specialists discover each other through tag broadcasts and reputation scoring. The result is an intelligence that scales horizontally — the more specialists exist, the better the network answers — without any single node needing to grow.
+
+## The Broadcast Protocol
+
+Each specialist periodically broadcasts its learned self-description. Packet format:
+
+```
+{ agent_id, tag, score }
+```
+
+Tags are **not hand-written**. The embedding model clusters the specialist's thought vectors; the LLM reads those clusters and names them. The tag cloud reflects what the specialist actually knows, updated as the graph learns.
+
+Two score dimensions:
+- `tag_score` — how strongly this specialist owns this tag (derived from vector space density)
+- `agent_score` — how reliable this specialist is overall (accumulated from consumer feedback)
+
+The registry becomes a tag index. Signal resolution: match tags, rank by `tag_score × agent_score`, route to the winner.
+
+## Floating Edges
+
+Specialists do not hard-code references to other specialists. A thought that needs more information emits a **signal** — a floating edge with a query and no target:
+
+```
+thought_A ──[signal: "more on X"]──► ???
+```
+
+At retrieval time, the routing layer resolves floating edges against the tag index. Unanswered signals remain visible as gaps. A new specialist that covers topic X will automatically attract those signals the moment it broadcasts its tag cloud.
+
+## The Reputation Loop
+
+```
+query → tag match → specialist answers → consumer scores → agent_score updates → routing shifts
+```
+
+The network self-improves through use. No curation. No manual ranking. Bad specialists sink; good ones rise.
+
+## Why Horizontal Scaling Changes Everything
+
+| Vertical (today) | Horizontal (this) |
+|---|---|
+| Bigger model = more capable | More specialists = more capable |
+| One model knows everything poorly | Each specialist knows its domain deeply |
+| Expensive, centralized | Cheap, distributed |
+| Wait for next model release | Acquire a new specialist |
+
+This is how intelligence works at biological and social scale. No single neuron or person knows everything — the network does.
 
 ## Current State
 
@@ -51,7 +100,13 @@ The system is functional end-to-end. What exists today:
 
 6. **Two-part navigation model.** The GNN has a base architecture that learns graph traversal structure. Strand layers (per-graph fine-tuning) are planned but not yet implemented. Currently the GNN trains per-graph from scratch.
 
-7. **Odin stays.** The system is built in Odin. Performance-sensitive paths — graph operations, GNN inference/training, binary persistence — stay in Odin. Python is used only for integration testing.
+7. **Tags are learned, not declared.** A specialist's identity comes from its embedding space — cluster the vectors, name the clusters, broadcast the result. The tag cloud is always true to what the graph actually contains.
+
+8. **Floating edges over hard links.** When a specialist needs more information, it emits a signal with no target. The network resolves it. This keeps each specialist's data model clean and makes the graph topology emergent rather than designed.
+
+9. **Reputation accumulates from use.** Agent scores come from consumer feedback on real queries, never from manual curation. The network routes toward quality automatically.
+
+10. **Scale by acquiring, not upgrading.** A new specialist integrates itself by broadcasting its tag cloud. The rest of the network discovers it automatically. Capability grows by addition, not replacement.
 
 ## Out of Scope
 

@@ -183,7 +183,7 @@ class Graph:
 		if not self.thoughts:
 			return []
 		scored = []
-		for t in self.thoughts.values():
+		for t in list(self.thoughts.values()):
 			sim = cosine(embedding, t.embedding)
 			if sim >= threshold:
 				scored.append((t, sim))
@@ -230,8 +230,15 @@ class Graph:
 		valid_edges = [e for e in self.edges if e.source_id in id_map and e.target_id in id_map]
 		sources = [id_map[e.source_id] for e in valid_edges]
 		targets = [id_map[e.target_id] for e in valid_edges]
-		edge_index = torch.tensor([sources, targets], dtype=torch.long)
-		edge_features = torch.stack([torch.from_numpy(e.embedding) for e in valid_edges])
+		if valid_edges:
+			edge_index = torch.stack([
+				torch.tensor(sources, dtype=torch.long),
+				torch.tensor(targets, dtype=torch.long),
+			], dim=0)
+			edge_features = torch.stack([torch.from_numpy(e.embedding) for e in valid_edges])
+		else:
+			edge_index = torch.zeros((2, 0), dtype=torch.long)
+			edge_features = torch.zeros((0,), dtype=torch.float)
 
 		return node_features, edge_index, edge_features, ordered_ids, valid_edges
 

@@ -26,10 +26,6 @@ services:
     volumes:
       - ../config:/config:ro
       - ../shard/web:/shard/web:rw
-      - shard-data:/root/.config/shard
-      - shard-graph:/root/.shard
+      - ../.shard:/.shard
     restart: unless-stopped
 
-volumes:
-  shard-data:
-  shard-graph:

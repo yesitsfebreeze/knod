@@ -322,7 +322,8 @@ let W, H, dpr;
 let all_nodes = [], tag_nodes = [], thought_nodes = [], edges = [];
 let node_idx = {}, nbrs = {}, edgeAdj = {};
 let store_clr = {}, clrI = 0;
-let layout_state = { tagPos: {}, angleOf: {} };
+let layout_state = { tagPos: {}, angleOf: {}, sw: Math.PI * 2 };
+let rawEdgeData = { edges: [], knn_edges: [] };
 let dimension_tags = [], dimensionControlEls = new Map();
 let dimension_weights = new Map(), dimension_vectors = new Map();
 let dimension_selection = { strength: 0, boosted: new Set(), suppressed: new Set(), deltas: new Map(), boosts: new Map(), fades: new Map() };
@@ -1636,6 +1637,7 @@ function setupRecencyColorControls() {
 
 // ---- 3D layout ----
 function layout(data) {
+	if (!data?.nodes) return;
 	all_nodes = []; tag_nodes = []; thought_nodes = []; edges = [];
 	node_idx = {}; nbrs = {}; edgeAdj = {}; store_clr = {}; clrI = 0;
 
@@ -1644,7 +1646,7 @@ function layout(data) {
 	const rest = [...data.nodes.filter(n => n.type !== "shard")]
 		.sort((a, b) => String(a.key).localeCompare(String(b.key)));
 	const N = shards.length, angleOf = {}, tagPos = {};
-	layout_state = { tagPos, angleOf };
+	rawEdgeData = { edges: data.edges || [], knn_edges: data.knn_edges || [] };
 	const now = Date.now() / 1000;
 
 	shards.forEach((s, i) => {
@@ -1661,6 +1663,7 @@ function layout(data) {
 	});
 
 	const sw = N > 0 ? (2 * Math.PI) / N : 2 * Math.PI;
+	layout_state = { tagPos, angleOf, sw };
 	const bk = {};
 	rest.forEach(t => {
 		const st = t.store || "global";
@@ -1769,6 +1772,59 @@ function layout(data) {
 	build_dimension_model();
 	renderDimensionControls();
 	relayout_scene({ resetView: true, recomputeMesh: true });
+}
+
+function appendThoughts(batch) {
+	if (!batch.length) return;
+	const { angleOf, sw } = layout_state;
+	const now = Date.now() / 1000;
+	for (const t of batch) {
+		if (node_idx[t.key]) continue;
+		const st = t.store || "global";
+		const isG = angleOf[st] === undefined;
+		const base = isG ? 0 : angleOf[st];
+		const col = sClr(isG ? "global" : st);
+		const ac = Math.min(t.access_count || 0, 20) / 20;
+		const theta = isG
+			? hash01(`${t.key}:theta`) * Math.PI * 2
+			: base + (hash01(`${t.key}:theta`) - 0.5) * sw * 0.72;
+		const radial = POLY_R * (isG ? 0.18 + hash01(`${t.key}:rad`) * 0.18 : 0.24 + (1 - ac) * 0.14 + hash01(`${t.key}:rad`) * 0.18);
+		const yJ = (hash01(`${t.key}:y`) - 0.5) * (isG ? 0.38 : 0.28);
+		const stamp = Math.max(t.last_accessed || 0, t.created_at || 0);
+		const nd = {
+			key: t.key, pos: [radial * Math.cos(theta), yJ, radial * Math.sin(theta)],
+			r: Math.max(0.02, Math.min(0.055, 0.02 + ac * 0.035)),
+			color: col, paletteKey: isG ? "global" : st, label: t.label, kind: "thought", shape: "cube",
+			store: isG ? "global" : st, source: t.source || "", access: t.access_count || 0,
+			created: t.created_at || 0, lastAccess: t.last_accessed || 0, embedPos: null,
+			linkCount: 0, linkStrength: 0, avgSuccess: 0, traversalLoad: 0, importance: 0.3,
+			recency: stamp > 0 ? 1 / (1 + Math.max(0, now - stamp) / (3600 * 24 * 14)) : 0,
+		};
+		nd.color = recencyColor(nd.recency);
+		all_nodes.push(nd); thought_nodes.push(nd); node_idx[nd.key] = nd;
+	}
+	// Resolve any raw edges whose endpoints are now both loaded
+	const edgeSet = new Set(edges.map(e => `${e.s.key}|${e.t.key}`));
+	for (const e of [...rawEdgeData.edges, ...(rawEdgeData.knn_edges || [])]) {
+		const s = node_idx[e.source], t = node_idx[e.target];
+		if (!s || !t) continue;
+		const k = `${s.key}|${t.key}`;
+		if (edgeSet.has(k)) continue;
+		edgeSet.add(k);
+		const edgeObj = {
+			s, t, w: e.weight, reason: e.reasoning || "", success: e.success_rate || 0,
+			traversals: e.traversal_count || 0, created: e.created_at || 0,
+			parent: e.source.startsWith("_") || e.target.startsWith("_"),
+			knn: e.type === "knn",
+		};
+		edges.push(edgeObj);
+		(nbrs[s.key] ||= new Set()).add(t.key);
+		(nbrs[t.key] ||= new Set()).add(s.key);
+		(edgeAdj[s.key] ||= []).push(edgeObj);
+		(edgeAdj[t.key] ||= []).push(edgeObj);
+	}
+	recolorNodesForTheme();
+	refresh_scene_buffers();
 }
 
 // ---- WebGPU init ----
@@ -2895,23 +2951,81 @@ function resize() {
 }
 
 // ---- boot ----
+let depthTex = null;
 resize();
 window.addEventListener("resize", () => { resize(); depthTex = null; });
 
 loadStoredVizSettings();
 applyTheme(currentTheme.id, { persist: false, recolorNodes: false, refresh: false });
-const data = await(await fetch("/graph/full")).json();
-document.getElementById("loading").remove();
-layout(data);
-document.getElementById("s-nodes").textContent = thought_nodes.length;
-document.getElementById("s-edges").textContent = edges.length;
-setupSpiralControls();
-setupThemeControls();
-setupRecencyColorControls();
-setupPanelSettings();
+
+let gpu;
+try { gpu = await initGPU(); } catch (e) {
+	document.body.innerHTML = `<div style="color:${colorHex(currentTheme.accents.red)};background:${currentTheme.backgroundHex};padding:40px;font-family:${UI_FONT_FAMILY}"><h2 style="margin-bottom:12px">WebGPU not available</h2><p style="color:${currentTheme.foregroundHex};margin-bottom:8px">${escapeHtml(e.message)}</p><p style="color:${currentTheme.foregroundHex}">Try Chrome 113+ or Edge 113+.</p></div>`;
+	throw e;
+}
+({ dev, fmt, gc } = gpu);
+geom = buildStaticGeometry(dev);
+({ circleMaskP, boxMaskP, triangleMaskP, circleFillP, boxFillP, triangleFillP, circleP, boxP, triangleP, edgeP, markerFillP, markerP, ub, bg } = makePipes(dev, fmt));
+bufs = buildBufs(dev);
+
+// Load shards + edges first for fast initial render, fallback to full load
+let metaData = null;
+try {
+	const res = await fetch("/graph/meta");
+	if (res.ok) {
+		const d = await res.json();
+		if (d?.nodes) metaData = d;
+	}
+} catch {}
+
+if (metaData) {
+	layout(metaData);
+	document.getElementById("loading").remove();
+	document.getElementById("s-nodes").textContent = thought_nodes.length;
+	document.getElementById("s-edges").textContent = edges.length;
+	setupSpiralControls();
+	setupThemeControls();
+	setupRecencyColorControls();
+	setupPanelSettings();
+
+	// Stream thoughts in batches
+	const BATCH_SIZE = 200;
+	let batchOffset = 0;
+	const totalThoughts = metaData.total_thoughts ?? 0;
+	while (batchOffset < totalThoughts) {
+		let batch;
+		try {
+			batch = await (await fetch(`/graph/thoughts?offset=${batchOffset}&limit=${BATCH_SIZE}`)).json();
+		} catch (e) {
+			console.error("Thought batch load error:", e);
+			break;
+		}
+		if (!batch.nodes?.length) break;
+		appendThoughts(batch.nodes);
+		document.getElementById("s-nodes").textContent = thought_nodes.length;
+		batchOffset += batch.nodes.length;
+		if (batch.nodes.length < BATCH_SIZE) break;
+	}
+} else {
+	// Fallback: full load (server not updated yet or meta unavailable)
+	try {
+		metaData = await (await fetch("/graph/full")).json();
+	} catch (e) {
+		document.getElementById("loading").textContent = `Load failed: ${e.message}`;
+		throw e;
+	}
+	layout(metaData);
+	document.getElementById("loading").remove();
+	document.getElementById("s-nodes").textContent = thought_nodes.length;
+	document.getElementById("s-edges").textContent = edges.length;
+	setupSpiralControls();
+	setupThemeControls();
+	setupRecencyColorControls();
+	setupPanelSettings();
+}
 
 // ---- live poll for updates ----
-let lastThoughtCount = data.nodes.filter(n => n.type !== "shard").length;
+let lastThoughtCount = metaData?.total_thoughts ?? thought_nodes.length;
 let pollInterval = null;
 
 async function pollForUpdates() {
@@ -2919,7 +3033,6 @@ async function pollForUpdates() {
 		const diff = await (await fetch("/diff")).json();
 		if (diff.added_count > 0) {
 			console.log(`New thoughts: ${diff.added_count}`);
-			// Refetch full graph to get new nodes + edges
 			const newData = await (await fetch("/graph/full")).json();
 			layout(newData);
 			document.getElementById("s-nodes").textContent = thought_nodes.length;
@@ -2938,18 +3051,6 @@ function startPolling() {
 	pollInterval = setInterval(pollForUpdates, 3000);
 }
 startPolling();
-
-let gpu;
-try { gpu = await initGPU(); } catch (e) {
-	document.body.innerHTML = `<div style="color:${colorHex(currentTheme.accents.red)};background:${currentTheme.backgroundHex};padding:40px;font-family:${UI_FONT_FAMILY}"><h2 style="margin-bottom:12px">WebGPU not available</h2><p style="color:${currentTheme.foregroundHex};margin-bottom:8px">${escapeHtml(e.message)}</p><p style="color:${currentTheme.foregroundHex}">Try Chrome 113+ or Edge 113+.</p></div>`;
-	throw e;
-}
-
-({ dev, fmt, gc } = gpu);
-geom = buildStaticGeometry(dev);
-({ circleMaskP, boxMaskP, triangleMaskP, circleFillP, boxFillP, triangleFillP, circleP, boxP, triangleP, edgeP, markerFillP, markerP, ub, bg } = makePipes(dev, fmt));
-bufs = buildBufs(dev);
-let depthTex = null;
 
 function getDT() {
 	if (!depthTex || depthTex.width !== cvs.width || depthTex.height !== cvs.height) {

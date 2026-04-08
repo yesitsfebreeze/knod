@@ -423,6 +423,20 @@ class Provider:
 			if not hasattr(msg, "tool_calls") or not msg.tool_calls:
 				return msg.content, tool_calls
 
+			# Assistant message with tool_calls must precede tool results (OpenAI requirement)
+			messages.append({
+				"role": "assistant",
+				"content": msg.content,
+				"tool_calls": [
+					{
+						"id": tc.id,
+						"type": "function",
+						"function": {"name": tc.function.name, "arguments": tc.function.arguments},
+					}
+					for tc in msg.tool_calls
+				],
+			})
+
 			# Process tool calls
 			for tc in msg.tool_calls:
 				tool_name = tc.function.name

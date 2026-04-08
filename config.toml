@@ -1,0 +1,62 @@
+[openai]
+api_key         = YOUR_OPENAI_API_KEY
+base_url        = https://api.openai.com/v1
+model           = gpt-4o-mini
+embedding_model = text-embedding-3-small
+
+enabled = true
+[local]
+api_key         = ollama
+base_url        = http://localhost:11434/v1
+model           = gemma4
+embedding_model = nomic-embed-text
+
+enabled = true
+[model]
+embedding_dim = 1536
+hidden_dim = 512
+num_layers = 3
+
+[graph]
+similarity_threshold = 0.65
+min_link_weight = 0.15
+edge_mask_ratio = 0.15
+margin = 0.15
+top_k = 8
+max_thoughts = 0
+max_edges = 0
+decay_coefficient = 0.0005
+dedup_threshold = 0.92
+
+[training]
+lr_max = 5e-4
+lr_min = 1e-5
+weight_decay = 0.02
+
+[limbo]
+limbo_scan_interval = 45.0
+limbo_cluster_min = 3
+limbo_cluster_threshold = 0.55
+
+[strand]
+strand_match_threshold = 0.75
+confidence_threshold = 0.75
+query_routing_threshold = 0.25
+
+[traversal]
+traversal_depth = 2
+traversal_fan_out = 8
+
+[refinement]
+refinement_interval = 8
+refinement_boost = 0.03
+refinement_dampen = 0.015
+refinement_min_traversals = 3
+
+[server]
+tcp_port = 7999
+http_port = 8080
+
+[storage]
+graph_path    = .shard/graph.shard
+base_gnn_path = .shard/base.shard
