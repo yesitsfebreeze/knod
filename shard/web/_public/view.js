@@ -1775,6 +1775,7 @@ function layout(data) {
 	relayout_scene({ resetView: true, recomputeMesh: true });
 }
 
+let _appendRelayoutTimer = null;
 function appendThoughts(batch) {
 	if (!batch.length) return;
 	const { angleOf, sw } = layout_state;
@@ -1797,7 +1798,7 @@ function appendThoughts(batch) {
 			r: Math.max(0.02, Math.min(0.055, 0.02 + ac * 0.035)),
 			color: col, paletteKey: isG ? "global" : st, label: t.label, kind: "thought", shape: "cube",
 			store: isG ? "global" : st, source: t.source || "", access: t.access_count || 0,
-			created: t.created_at || 0, lastAccess: t.last_accessed || 0, embedPos: null,
+			created: t.created_at || 0, lastAccess: t.last_accessed || 0, embedPos: Array.isArray(t.embed_pos) ? t.embed_pos : null,
 			linkCount: 0, linkStrength: 0, avgSuccess: 0, traversalLoad: 0, importance: 0.3,
 			recency: stamp > 0 ? 1 / (1 + Math.max(0, now - stamp) / (3600 * 24 * 14)) : 0,
 		};
@@ -1807,6 +1808,9 @@ function appendThoughts(batch) {
 	resolveEdges();
 	recolorNodesForTheme();
 	refresh_scene_buffers();
+	// Debounce the full spiral relayout so parallel BFS chains don't thrash it
+	clearTimeout(_appendRelayoutTimer);
+	_appendRelayoutTimer = setTimeout(() => relayout_scene({ recomputeMesh: true }), 80);
 }
 
 function resolveEdges() {
@@ -3058,6 +3062,19 @@ async function bfsChain(startKey) {
 				.catch(e => console.error("Thought sweep error:", e))
 		));
 	}
+
+	// Load KNN edges — cross-shard similarity links that BFS can't discover
+	fetch("/graph/knn_edges")
+		.then(r => r.json())
+		.then(data => {
+			if (data.knn_edges?.length) {
+				rawEdgeData.knn_edges.push(...data.knn_edges);
+				resolveEdges();
+				refresh_scene_buffers();
+				document.getElementById("s-edges").textContent = edges.length;
+			}
+		})
+		.catch(e => console.error("KNN edges error:", e));
 })();
 
 // ---- live poll for updates ----

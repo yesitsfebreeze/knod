@@ -77,6 +77,7 @@ class Handler:
 		self._last_poll_state_lock = threading.Lock()
 		self._last_shard_state: dict[str, tuple[int, int]] = {}  # name -> (thoughts, edges)
 		self._graph_file_mtime: float = 0.0  # mtime of graph.shard as we last wrote/read it
+		self._embed_proj: tuple | None = None  # cached (mean, basis, scale, min_dim) for embed_pos projection
 
 	def init(self):
 		base = Path(self.cfg.graph_path).with_suffix("")
@@ -618,27 +619,18 @@ class Handler:
 
 	def graph_full(self) -> dict:
 		"""Return complete graph as nodes + edges for visualization."""
+		# Recompute projection so embed_pos reflects current state of the graph
+		self._embed_proj = None
+		self._compute_embed_proj()
+
 		nodes = []
 		edges = []
 		seen_edge_keys: set[tuple[str, str]] = set()
-		thought_vectors: list[tuple[dict, np.ndarray]] = []
 
 		def _collect(graph, store: str):
 			prefix = "" if store == "global" else f"{store}:"
 			for t in sorted(graph.thoughts.values(), key=lambda thought: thought.id):
-				node = {
-					"key": f"{prefix}{t.id}",
-					"label": t.text[:80],
-					"source": t.source,
-					"store": store,
-					"type": "thought",
-					"access_count": t.access_count,
-					"created_at": t.created_at,
-					"last_accessed": t.last_accessed,
-				}
-				nodes.append(node)
-				if t.embedding is not None and len(t.embedding) > 0:
-					thought_vectors.append((node, np.asarray(t.embedding, dtype=float).ravel()))
+				nodes.append(self._thought_node(t, prefix))
 			for e in sorted(graph.edges, key=lambda edge: (edge.source_id, edge.target_id, edge.created_at)):
 				key = (f"{prefix}{e.source_id}", f"{prefix}{e.target_id}")
 				if key in seen_edge_keys:
@@ -660,26 +652,6 @@ class Handler:
 		_collect(self.graph, "global")
 		for name, shard in sorted(self._shards.items()):
 			_collect(shard.graph, name)
-
-		if thought_vectors:
-			min_dim = min(vec.shape[0] for _, vec in thought_vectors)
-			matrix = np.stack([vec[:min_dim] for _, vec in thought_vectors])
-			centered = matrix - matrix.mean(axis=0, keepdims=True)
-			coords = centered[:, :3] if min_dim >= 3 else centered
-			if centered.shape[0] >= 2 and min_dim > 0:
-				try:
-					_, _, vt = np.linalg.svd(centered, full_matrices=False)
-					basis = vt[: min(3, vt.shape[0])]
-					coords = centered @ basis.T
-				except np.linalg.LinAlgError:
-					coords = centered[:, : min(3, centered.shape[1])]
-			if coords.shape[1] < 3:
-				coords = np.pad(coords, ((0, 0), (0, 3 - coords.shape[1])))
-			scale = np.percentile(np.abs(coords), 95, axis=0)
-			scale[scale < 1e-6] = 1.0
-			normalized = np.clip(coords / scale, -1.5, 1.5)
-			for (node, _), pos in zip(thought_vectors, normalized, strict=False):
-				node["embed_pos"] = [round(float(v), 4) for v in pos[:3]]
 
 		# Add shard hub nodes and link each shard's thoughts to it
 		for name, shard in self._shards.items():
@@ -709,41 +681,50 @@ class Handler:
 						}
 					)
 
-		# Compute k-nearest-neighbor edges based on embedding cosine similarity
+		return {"nodes": nodes, "edges": edges, "knn_edges": self.graph_knn_edges()["knn_edges"]}
+
+	def graph_knn_edges(self, k: int = 3) -> dict:
+		"""Compute k-nearest-neighbour edges across all thoughts (global + shards).
+
+		Cross-shard KNN edges are the only way to visually connect thoughts that
+		live in different specialist graphs.  Called by graph_full and exposed as
+		its own endpoint so the BFS loader can fetch them without re-loading all
+		nodes.
+		"""
+		from .util.math import cosine
+
+		all_thoughts: list[tuple[str, np.ndarray]] = []
+		for t in self.graph.thoughts.values():
+			if t.embedding is not None and len(t.embedding) > 0:
+				all_thoughts.append((str(t.id), np.asarray(t.embedding, dtype=float).ravel()))
+		for name, shard in self._shards.items():
+			for t in shard.graph.thoughts.values():
+				if t.embedding is not None and len(t.embedding) > 0:
+					all_thoughts.append((f"{name}:{t.id}", np.asarray(t.embedding, dtype=float).ravel()))
+
 		knn_edges = []
-		# Collect all thoughts with their embeddings and prefixed keys
-		all_thoughts = [(node["key"], vec) for node, vec in thought_vectors]
-
+		seen: set[tuple[str, str]] = set()
+		k = min(k, len(all_thoughts) - 1)
 		if len(all_thoughts) > 1:
-			from .util.math import cosine
-
-			k = min(3, len(all_thoughts) - 1)
 			for i, (key_i, emb_i) in enumerate(all_thoughts):
-				sims = []
-				for j, (key_j, emb_j) in enumerate(all_thoughts):
-					if i == j:
-						continue
-					sims.append((cosine(emb_i, emb_j), key_j))
-				sims.sort(key=lambda x: -x[0])
+				sims = sorted(
+					((cosine(emb_i, emb_j), key_j) for j, (key_j, emb_j) in enumerate(all_thoughts) if j != i),
+					key=lambda x: -x[0],
+				)
 				for sim, key_j in sims[:k]:
-					edge_key = (key_i, key_j)
-					rev_key = (key_j, key_i)
-					if edge_key not in seen_edge_keys and rev_key not in seen_edge_keys:
-						seen_edge_keys.add(edge_key)
-						knn_edges.append(
-							{
-								"source": key_i,
-								"target": key_j,
-								"weight": round(max(0.0, sim), 3),
-								"reasoning": "embedding similarity",
-								"success_rate": 0.0,
-								"traversal_count": 0,
-								"created_at": 0,
-								"type": "knn",
-							}
-						)
-
-		return {"nodes": nodes, "edges": edges, "knn_edges": knn_edges}
+					if (key_i, key_j) not in seen and (key_j, key_i) not in seen:
+						seen.add((key_i, key_j))
+						knn_edges.append({
+							"source": key_i,
+							"target": key_j,
+							"weight": round(max(0.0, sim), 3),
+							"reasoning": "embedding similarity",
+							"success_rate": 0.0,
+							"traversal_count": 0,
+							"created_at": 0,
+							"type": "knn",
+						})
+		return {"knn_edges": knn_edges}
 
 	def graph_meta(self) -> dict:
 		"""Lightweight snapshot: shard hub nodes + total thought count for fast initial render."""
@@ -776,8 +757,59 @@ class Handler:
 					})
 		return {"nodes": nodes, "edges": edges, "knn_edges": [], "total_thoughts": total}
 
+	def _compute_embed_proj(self) -> None:
+		"""Compute and cache PCA projection basis from all thought embeddings."""
+		vecs = []
+		for t in self.graph.thoughts.values():
+			if t.embedding is not None and len(t.embedding) > 0:
+				vecs.append(np.asarray(t.embedding, dtype=float).ravel())
+		for shard in self._shards.values():
+			for t in shard.graph.thoughts.values():
+				if t.embedding is not None and len(t.embedding) > 0:
+					vecs.append(np.asarray(t.embedding, dtype=float).ravel())
+		if len(vecs) < 2:
+			return
+		min_dim = min(v.shape[0] for v in vecs)
+		matrix = np.stack([v[:min_dim] for v in vecs])
+		mean = matrix.mean(axis=0)
+		centered = matrix - mean
+		basis = None
+		try:
+			_, _, vt = np.linalg.svd(centered, full_matrices=False)
+			basis = vt[: min(3, vt.shape[0])]
+			coords = centered @ basis.T
+		except np.linalg.LinAlgError:
+			coords = centered[:, : min(3, centered.shape[1])]
+		if coords.shape[1] < 3:
+			coords = np.pad(coords, ((0, 0), (0, 3 - coords.shape[1])))
+		scale = np.percentile(np.abs(coords), 95, axis=0)
+		scale[scale < 1e-6] = 1.0
+		self._embed_proj = (mean, basis, scale, min_dim)
+
+	def _project_embed(self, embedding) -> list[float] | None:
+		"""Project a single embedding to 3D using cached PCA basis."""
+		if embedding is None or len(embedding) == 0:
+			return None
+		if self._embed_proj is None:
+			self._compute_embed_proj()
+		if self._embed_proj is None:
+			return None
+		mean, basis, scale, min_dim = self._embed_proj
+		vec = np.asarray(embedding, dtype=float).ravel()
+		if vec.shape[0] < min_dim:
+			return None
+		centered = vec[:min_dim] - mean
+		if basis is not None:
+			pos = centered @ basis.T
+		else:
+			pos = centered[: min(3, centered.shape[0])]
+		if pos.shape[0] < 3:
+			pos = np.pad(pos, (0, 3 - pos.shape[0]))
+		normalized = np.clip(pos[:3] / scale, -1.5, 1.5)
+		return [round(float(v), 4) for v in normalized]
+
 	def _thought_node(self, t: "Thought", prefix: str = "") -> dict:
-		return {
+		node = {
 			"key": f"{prefix}{t.id}" if prefix else str(t.id),
 			"label": t.text[:80],
 			"source": t.source,
@@ -787,6 +819,10 @@ class Handler:
 			"created_at": t.created_at,
 			"last_accessed": t.last_accessed,
 		}
+		embed_pos = self._project_embed(t.embedding)
+		if embed_pos is not None:
+			node["embed_pos"] = embed_pos
+		return node
 
 	def _edge_dict(self, e: "Edge", prefix: str = "") -> dict:
 		return {
@@ -829,6 +865,32 @@ class Handler:
 					continue
 				seen_ek.add(ek)
 				edges.append(self._edge_dict(e, prefix))
+
+		# Always include shard hub nodes — the client needs these to anchor the ring layout
+		for name, shard in sorted(self._shards.items()):
+			hub_key = f"_shard:{name}"
+			nodes.insert(0, {
+				"key": hub_key,
+				"label": name,
+				"source": "",
+				"store": name,
+				"type": "shard",
+				"access_count": 0,
+				"created_at": 0,
+			})
+			# Link seed thoughts that belong to this shard
+			for t, prefix, _ in seeds:
+				if prefix.rstrip(":") == name:
+					ek = (hub_key, f"{prefix}{t.id}")
+					if ek not in seen_ek:
+						seen_ek.add(ek)
+						edges.append({
+							"source": hub_key,
+							"target": f"{prefix}{t.id}",
+							"weight": 0.3,
+							"reasoning": f"belongs to {name}",
+							"success_rate": 0.0,
+						})
 
 		total = sum(g.num_thoughts for g in [self.graph] + [s.graph for s in self._shards.values()])
 		return {"nodes": nodes, "edges": edges, "total_thoughts": total, "seed_keys": list(seed_keys)}

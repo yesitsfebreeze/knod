@@ -346,6 +346,10 @@ def http(handler: Handler) -> FastAPI:
 		known = set(body.get("known", []))
 		return handler.graph_expand(keys=keys, known=known)
 
+	@app.get("/graph/knn_edges")
+	def graph_knn_edges(k: int = 3):
+		return handler.graph_knn_edges(k=k)
+
 	@app.get("/graph/thoughts")
 	def graph_thoughts(offset: int = 0, limit: int = 200):
 		return handler.graph_thoughts(offset=offset, limit=limit)
