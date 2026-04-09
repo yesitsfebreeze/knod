@@ -81,9 +81,8 @@ class IngestRequest(BaseModel):
 
 
 class IngestResponse(BaseModel):
-	thoughts_added: int
-	total_thoughts: int
-	total_edges: int
+	sent_to_limbo: int
+	limbo_total: int
 
 
 class AskRequest(BaseModel):
@@ -252,9 +251,8 @@ def http(handler: Handler) -> FastAPI:
 	def ingest(req: IngestRequest):
 		stats = handler.ingest_sync(req.text, req.source, req.descriptor)
 		return IngestResponse(
-			thoughts_added=stats.get("committed", 0),
-			total_thoughts=stats["thoughts"],
-			total_edges=stats["edges"],
+			sent_to_limbo=stats["sent_to_limbo"],
+			limbo_total=stats["limbo_total"],
 		)
 
 	@app.post("/ask", response_model=AskResponse)

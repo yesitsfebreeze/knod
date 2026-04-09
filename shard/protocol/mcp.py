@@ -112,7 +112,7 @@ def _mcp(handler: Handler, host: str = "127.0.0.1", port: int = 8766) -> FastMCP
 			except KeyError:
 				return json.dumps({"error": f"Shard '{target}' not loaded. Use list_shards or create_shard first."})
 		result = handler.ingest_sync(text, source=source, descriptor=descriptor)
-		log.info("ingest_sync done: %d thoughts, %d edges", result.get("thoughts", 0), result.get("edges", 0))
+		log.info("ingest_sync done: %d sent to limbo (%d total)", result.get("sent_to_limbo", 0), result.get("limbo_total", 0))
 		return json.dumps(result)
 
 	@mcp.tool()
