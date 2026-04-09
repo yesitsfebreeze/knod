@@ -1,0 +1,24 @@
+{
+	"name": "shard",
+	"version": "1.0.0",
+	"description": "Knowledge graph MCP server — connects to a running shard instance and exposes semantic memory tools.",
+	"author": {
+		"name": "febreeze"
+	},
+	"repository": "https://github.com/febreeze/shard-plugin",
+	"homepage": "https://github.com/febreeze/shard-plugin",
+	"keywords": [
+		"knowledge-graph",
+		"memory",
+		"rag",
+		"mcp",
+		"semantic-search"
+	],
+	"license": "MIT",
+	"mcpServers": {
+		"shard": {
+			"type": "http",
+			"url": "${SHARD_MCP_URL:-http://localhost:8766/mcp}"
+		}
+	}
+}
