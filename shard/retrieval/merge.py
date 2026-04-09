@@ -53,7 +53,15 @@ def _effective_threshold(cos: dict[int, float], graph: Graph, cfg: Config) -> fl
 
 	# Combined: both factors independently pull the threshold down
 	combined = mat * query_factor
-	return SIMILARITY_FLOOR + (cfg.similarity_threshold - SIMILARITY_FLOOR) * combined
+	threshold = SIMILARITY_FLOOR + (cfg.similarity_threshold - SIMILARITY_FLOOR) * combined
+
+	# Guarantee the best-matching thought can always pass — the formula above
+	# produces threshold > best_cos for mature graphs when best_cos is below the
+	# configured max, which silently filters out all results even when data exists.
+	if best_cos >= SIMILARITY_FLOOR:
+		threshold = min(threshold, best_cos)
+
+	return threshold
 
 
 def merge(

@@ -6,7 +6,11 @@ import (
 	"shard/internal/gossip"
 	"sort"
 	"sync"
+	"time"
 )
+
+// TTL controls how long a peer is considered live after its last announce.
+const TTL = 3 * 30 * time.Second // 3 × gossip_interval
 
 // Entry is one specialist's record in the registry.
 type Entry struct {
@@ -14,13 +18,18 @@ type Entry struct {
 	GraphPath  string
 	AgentScore float32
 	Tags       map[string]float32 // tag → tag_score
+	// Network info populated from gossip announce packets
+	Host     string
+	HTTPPort int
+	PID      int
+	LastSeen time.Time
 }
 
 // Registry is the parent's view of all known specialists.
 type Registry struct {
-	mu      sync.RWMutex
-	agents  map[string]*Entry        // agent_id → entry
-	tagIdx  map[string][]*tagRecord  // tag → sorted list of (agent_id, combined_score)
+	mu     sync.RWMutex
+	agents map[string]*Entry       // agent_id → entry
+	tagIdx map[string][]*tagRecord // tag → sorted list of (agent_id, combined_score)
 }
 
 type tagRecord struct {
@@ -35,22 +44,24 @@ func New() *Registry {
 	}
 }
 
-// Register adds a shard by name. Path is always ~/.shards/<name>.shard.
-func (r *Registry) Register(name string, dbPath string) {
+// Register adds a known local shard by agent ID and file path.
+func (r *Registry) Register(agentID, dbPath string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if _, ok := r.agents[name]; !ok {
-		r.agents[name] = &Entry{
-			AgentID:    name,
+	if _, ok := r.agents[agentID]; !ok {
+		r.agents[agentID] = &Entry{
+			AgentID:    agentID,
 			GraphPath:  dbPath,
 			AgentScore: 1.0,
 			Tags:       make(map[string]float32),
+			LastSeen:   time.Now(),
 		}
 	}
 }
 
-// IngestPacket processes an incoming gossip broadcast.
-func (r *Registry) IngestPacket(p gossip.Packet) {
+// IngestPacket processes an incoming gossip announce broadcast.
+// senderHost is the IP address the packet arrived from.
+func (r *Registry) IngestPacket(p gossip.Packet, senderHost string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -63,8 +74,16 @@ func (r *Registry) IngestPacket(p gossip.Packet) {
 		}
 		r.agents[p.AgentID] = entry
 	}
-	entry.Tags[p.Tag] = p.TagScore
-	r.rebuildTagIndex(p.Tag)
+	entry.AgentScore = p.AgentScore
+	entry.Host = senderHost
+	entry.HTTPPort = p.HTTPPort
+	entry.PID = p.PID
+	entry.LastSeen = time.Now()
+
+	if p.Tag != "" {
+		entry.Tags[p.Tag] = p.TagScore
+		r.rebuildTagIndex(p.Tag)
+	}
 }
 
 // RecordFeedback adjusts an agent's score based on consumer rating (0–1).
@@ -77,14 +96,13 @@ func (r *Registry) RecordFeedback(agentID string, rating float32) {
 	}
 	// Exponential moving average
 	entry.AgentScore = 0.9*entry.AgentScore + 0.1*rating
-	// Rebuild index for all this agent's tags
 	for tag := range entry.Tags {
 		r.rebuildTagIndex(tag)
 	}
 }
 
-// Resolve finds the best agent for a signal query by tag matching.
-// Returns the top-n agent IDs ranked by combined score.
+// Resolve finds the best agents for a query by tag matching.
+// Returns top-n agent IDs ranked by combined score.
 func (r *Registry) Resolve(tags []string, n int) []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -133,6 +151,24 @@ func (r *Registry) AllAgents() []string {
 		ids = append(ids, id)
 	}
 	return ids
+}
+
+// LivePeers returns entries seen within the TTL window (excluding self).
+func (r *Registry) LivePeers(selfID string) []*Entry {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	cutoff := time.Now().Add(-TTL)
+	var out []*Entry
+	for _, e := range r.agents {
+		if e.AgentID == selfID {
+			continue
+		}
+		if e.LastSeen.After(cutoff) {
+			cp := *e
+			out = append(out, &cp)
+		}
+	}
+	return out
 }
 
 func (r *Registry) rebuildTagIndex(tag string) {

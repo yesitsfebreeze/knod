@@ -15,6 +15,7 @@ from ..config import Config
 from ..shard.graph import Graph
 from ..shard.gnn import ShardMPNN, ShardLayer
 from ..util.math import cosine
+from .merge import SIMILARITY_FLOOR
 
 log = logging.getLogger(__name__)
 
@@ -30,7 +31,7 @@ def cosine_scores(query_emb: np.ndarray, graph: Graph) -> dict[int, float]:
 def edge_scores(query_emb: np.ndarray, graph: Graph, cfg: Config) -> dict[int, float]:
 	"""Q_S3: Edge embedding search; each matching edge boosts its endpoint nodes."""
 	scores: dict[int, float] = {}
-	edge_hits = graph.find_edges(query_emb, k=cfg.top_k * 2, threshold=cfg.similarity_threshold)
+	edge_hits = graph.find_edges(query_emb, k=cfg.top_k * 2, threshold=SIMILARITY_FLOOR)
 	for edge, esim in edge_hits:
 		for tid in (edge.source_id, edge.target_id):
 			if tid in graph.thoughts:

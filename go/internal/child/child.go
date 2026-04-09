@@ -4,6 +4,7 @@
 package child
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -27,14 +28,18 @@ type Response struct {
 // Result is one matching thought.
 type Result struct {
 	ThoughtID uint64  `json:"thought_id"`
+	IP        string  `json:"ip"`
 	Text      string  `json:"text"`
 	Score     float32 `json:"score"`
 }
 
 // Run is the child's main loop: read request → query graph → write response → exit.
 func Run(graphPath string) {
-	g := graph.New("", "", graphPath)
-	// TODO: load graph from disk
+	g, err := graph.Load("", "", graphPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "child: load graph: %v\n", err)
+		os.Exit(1)
+	}
 
 	var req Request
 	if err := json.NewDecoder(os.Stdin).Decode(&req); err != nil {
@@ -47,8 +52,9 @@ func Run(graphPath string) {
 	for i, t := range thoughts {
 		results[i] = Result{
 			ThoughtID: t.ID,
+			IP:        t.IP,
 			Text:      t.Text,
-			Score:     0, // TODO: GNN scoring
+			Score:     t.Score,
 		}
 	}
 
@@ -56,20 +62,19 @@ func Run(graphPath string) {
 	json.NewEncoder(os.Stdout).Encode(resp)
 }
 
-// Spawn launches the binary as a child for the given shard name.
-// The child resolves its own DB path from ~/.shards/<name>.shard.
-func Spawn(selfPath, shardName string, req Request) (*Response, error) {
+// Spawn launches the binary as a child for the given shard path.
+func Spawn(selfPath, shardPath string, req Request) (*Response, error) {
 	data, err := json.Marshal(req)
 	if err != nil {
 		return nil, err
 	}
 
-	cmd := exec.Command(selfPath, "--child="+shardName)
-	cmd.Stdin = mustReader(data)
+	cmd := exec.Command(selfPath, "--child="+shardPath)
+	cmd.Stdin = bytes.NewReader(data)
 
 	out, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("child %s: %w", graphPath, err)
+		return nil, fmt.Errorf("child %s: %w", shardPath, err)
 	}
 
 	var resp Response
@@ -79,23 +84,23 @@ func Spawn(selfPath, shardName string, req Request) (*Response, error) {
 	return &resp, nil
 }
 
-// SpawnAll launches one child per shard name in parallel and merges results.
-func SpawnAll(selfPath string, shardNames []string, req Request) ([]Result, error) {
+// SpawnAll launches one child per shard path in parallel and merges results.
+func SpawnAll(selfPath string, shardPaths []string, req Request) ([]Result, error) {
 	type outcome struct {
 		resp *Response
 		err  error
 	}
 
-	ch := make(chan outcome, len(shardNames))
-	for _, name := range shardNames {
-		go func(n string) {
-			resp, err := Spawn(selfPath, n, req)
+	ch := make(chan outcome, len(shardPaths))
+	for _, p := range shardPaths {
+		go func(sp string) {
+			resp, err := Spawn(selfPath, sp, req)
 			ch <- outcome{resp, err}
-		}(name)
+		}(p)
 	}
 
 	var all []Result
-	for range shardNames {
+	for range shardPaths {
 		o := <-ch
 		if o.err != nil {
 			fmt.Fprintf(os.Stderr, "child error: %v\n", o.err)
@@ -105,16 +110,3 @@ func SpawnAll(selfPath string, shardNames []string, req Request) ([]Result, erro
 	}
 	return all, nil
 }
-
-type byteReader struct{ data []byte; pos int }
-
-func (b *byteReader) Read(p []byte) (int, error) {
-	if b.pos >= len(b.data) {
-		return 0, fmt.Errorf("EOF")
-	}
-	n := copy(p, b.data[b.pos:])
-	b.pos += n
-	return n, nil
-}
-
-func mustReader(data []byte) *byteReader { return &byteReader{data: data} }

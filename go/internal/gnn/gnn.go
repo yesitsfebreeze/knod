@@ -5,14 +5,21 @@
 //   - 3 message-passing layers
 //   - 512 hidden dim
 //   - Input: thought embedding (1536) + aggregated neighbor embeddings (1536)
-//   - Output: relevance score per thought
+//   - Output: relevance score per thought (sigmoid)
 //
 // No external ML library. Pure Go matrix math.
-// Weights are loaded from a .gnn file alongside the .shard graph.
+// Weights are loaded from a .gnn file alongside the graph.
 // Training happens externally (Python); this package does inference only.
+// If no weight file exists, LoadWeights returns a random-initialized model
+// (degraded scoring, not a crash).
 package gnn
 
-import "math"
+import (
+	"encoding/gob"
+	"math"
+	"math/rand"
+	"os"
+)
 
 const (
 	InputDim  = 1536
@@ -32,10 +39,62 @@ type MPNN struct {
 	ScoreW []float32 // [HiddenDim] — dot with hidden to get scalar score
 }
 
+// LoadWeights loads an MPNN from a gob-encoded weight file.
+// Falls back to a random-initialized model if the file does not exist.
+func LoadWeights(path string) *MPNN {
+	f, err := os.Open(path)
+	if err != nil {
+		return randomInit()
+	}
+	defer f.Close()
+
+	var m MPNN
+	if err := gob.NewDecoder(f).Decode(&m); err != nil {
+		return randomInit()
+	}
+	return &m
+}
+
+// SaveWeights writes an MPNN to a gob-encoded file.
+func (m *MPNN) SaveWeights(path string) error {
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return gob.NewEncoder(f).Encode(m)
+}
+
+// randomInit creates an MPNN with Xavier-scaled random weights.
+func randomInit() *MPNN {
+	m := &MPNN{}
+	for i := range m.Layers {
+		inDim := InputDim * 2
+		if i > 0 {
+			inDim = HiddenDim
+		}
+		scale := float32(math.Sqrt(2.0 / float64(inDim+HiddenDim)))
+		w := make([][]float32, HiddenDim)
+		for j := range w {
+			w[j] = make([]float32, inDim)
+			for k := range w[j] {
+				w[j][k] = float32(rand.NormFloat64()) * scale
+			}
+		}
+		m.Layers[i] = &Layer{W: w, B: make([]float32, HiddenDim)}
+	}
+	m.ScoreW = make([]float32, HiddenDim)
+	scale := float32(math.Sqrt(1.0 / float64(HiddenDim)))
+	for i := range m.ScoreW {
+		m.ScoreW[i] = float32(rand.NormFloat64()) * scale
+	}
+	return m
+}
+
 // Score returns a relevance score for a thought given its embedding
 // and the mean embedding of its neighbors.
 func (m *MPNN) Score(thoughtEmb, neighborMean []float32) float32 {
-	// Concatenate thought + neighbor mean as input
+	// Concatenate thought + neighbor mean as input.
 	input := make([]float32, InputDim*2)
 	copy(input[:InputDim], thoughtEmb)
 	copy(input[InputDim:], neighborMean)
@@ -45,15 +104,16 @@ func (m *MPNN) Score(thoughtEmb, neighborMean []float32) float32 {
 		hidden = layer.forward(hidden, i == 0)
 	}
 
-	// Final dot product with score head
 	var score float32
 	for i, w := range m.ScoreW {
-		score += w * hidden[i]
+		if i < len(hidden) {
+			score += w * hidden[i]
+		}
 	}
 	return sigmoid(score)
 }
 
-func (l *Layer) forward(input []float32, first bool) []float32 {
+func (l *Layer) forward(input []float32, _ bool) []float32 {
 	out := make([]float32, HiddenDim)
 	inDim := len(input)
 	for i := 0; i < HiddenDim; i++ {
