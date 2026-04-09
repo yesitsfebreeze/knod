@@ -28,8 +28,8 @@ def _mcp(handler: Handler, host: str = "127.0.0.1", port: int = 8766) -> FastMCP
 
 	@mcp.tool()
 	def ingest(text: str, source: str = "", descriptor: str = "", shard: str = "") -> str:
-		"""Ingest text into the knowledge graph. Use shard= to target a specific specialist shard by name instead of the global graph."""
-		log.info("ingest: source=%s shard=%s len=%d", source or "(none)", shard or "global", len(text))
+		"""Ingest text into the knowledge graph. Use shard= to target a specific specialist shard, or leave empty to auto-route to the best matching shard."""
+		log.info("ingest: source=%s shard=%s len=%d", source or "(none)", shard or "auto", len(text))
 		log.debug("ingest content: %.200s", text)
 		if shard:
 			try:
@@ -101,15 +101,16 @@ def _mcp(handler: Handler, host: str = "127.0.0.1", port: int = 8766) -> FastMCP
 
 	@mcp.tool()
 	def ingest_sync(text: str, source: str = "", descriptor: str = "", shard: str = "") -> str:
-		"""Ingest text synchronously and return committed thoughts, rejection count, and dedup count. Use shard= to target a specific specialist shard."""
-		log.info("ingest_sync: source=%s shard=%s len=%d", source or "(none)", shard or "global", len(text))
+		"""Ingest text synchronously and return committed thoughts, rejection count, and dedup count. Use shard= to target a specific specialist shard, or leave empty to auto-route to the best match."""
+		target = shard or handler.route_shard(text)
+		log.info("ingest_sync: source=%s shard=%s len=%d", source or "(none)", target or "global", len(text))
 		log.debug("ingest_sync content: %.200s", text)
-		if shard:
+		if target:
 			try:
-				count = handler.ingest_into_shard(shard, text, source=source, descriptor=descriptor)
-				return json.dumps({"shard": shard, "committed": count})
+				count = handler.ingest_into_shard(target, text, source=source, descriptor=descriptor)
+				return json.dumps({"shard": target, "committed": count})
 			except KeyError:
-				return json.dumps({"error": f"Shard '{shard}' not loaded. Use list_shards or create_shard first."})
+				return json.dumps({"error": f"Shard '{target}' not loaded. Use list_shards or create_shard first."})
 		result = handler.ingest_sync(text, source=source, descriptor=descriptor)
 		log.info("ingest_sync done: %d thoughts, %d edges", result.get("thoughts", 0), result.get("edges", 0))
 		return json.dumps(result)

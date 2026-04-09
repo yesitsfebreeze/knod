@@ -147,12 +147,42 @@ class Handler:
 			self._queue.put(None)  # sentinel
 		self.save()
 
-	def enqueue(self, text: str, source: str = "", descriptor: str = "") -> tuple[bool, int]:
-		"""Try to enqueue ingest. Returns (queued, pending_count)."""
+	def route_shard(self, text: str) -> str | None:
+		"""Find the best matching shard for text based on profile similarity.
+
+		Returns the shard name if a match exceeds shard_match_threshold, else None (global).
+		"""
+		if not self._shards:
+			return None
+		try:
+			emb = self.provider.embed(text[:800])
+		except Exception:
+			log.debug("route_shard embed failed, falling back to global")
+			return None
+		best_name, best_sim = None, self.cfg.shard_match_threshold
+		for name, shard in self._shards.items():
+			if shard.graph.profile is None:
+				continue
+			sim = cosine(shard.graph.profile, emb)
+			log.debug("route_shard: '%s' sim=%.3f", name, sim)
+			if sim > best_sim:
+				best_sim = sim
+				best_name = name
+		if best_name:
+			log.info("route_shard: routed to '%s' (sim=%.3f)", best_name, best_sim)
+		else:
+			log.debug("route_shard: no match above threshold %.3f, using global", self.cfg.shard_match_threshold)
+		return best_name
+
+	def enqueue(self, text: str, source: str = "", descriptor: str = "", shard_name: str | None = None) -> tuple[bool, int]:
+		"""Try to enqueue ingest. Returns (queued, pending_count).
+
+		shard_name=None means auto-route to best shard; pass "" to force global.
+		"""
 		if self._queue is None:
 			return False, 0
 		try:
-			self._queue.put_nowait((text, source, descriptor))
+			self._queue.put_nowait((text, source, descriptor, shard_name))
 			return True, self._queue.qsize()
 		except Full:
 			return False, self._queue.qsize()
@@ -162,10 +192,16 @@ class Handler:
 			item = self._queue.get()
 			if item is None:
 				break
-			text, source, descriptor = item
+			text, source, descriptor, shard_name = item
 			self._in_flight.set()
 			try:
-				self._ingest_sync(text, source, descriptor)
+				# None = auto-route, "" = force global
+				if shard_name is None:
+					shard_name = self.route_shard(text)
+				if shard_name and shard_name in self._shards:
+					self.ingest_into_shard(shard_name, text, source=source, descriptor=descriptor)
+				else:
+					self._ingest_sync(text, source, descriptor)
 			except Exception:
 				log.exception("Queue ingest failed")
 			finally:
