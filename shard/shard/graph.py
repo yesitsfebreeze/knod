@@ -90,12 +90,43 @@ class Edge:
 
 
 @dataclass
+class LimboDocument:
+	"""Original ingested text, kept until all its thoughts leave limbo."""
+
+	id: str
+	text: str
+	source: str = ""
+	descriptor: str = ""
+	created_at: float = field(default_factory=time.time)
+
+	def to_dict(self) -> dict:
+		return {
+			"id": self.id,
+			"text": self.text,
+			"source": self.source,
+			"descriptor": self.descriptor,
+			"created_at": self.created_at,
+		}
+
+	@classmethod
+	def from_dict(cls, d: dict) -> "LimboDocument":
+		return cls(
+			id=d["id"],
+			text=d["text"],
+			source=d.get("source", ""),
+			descriptor=d.get("descriptor", ""),
+			created_at=d.get("created_at", 0.0),
+		)
+
+
+@dataclass
 class LimboThought:
-	"""Thought rejected by MCMC gate, awaiting cluster analysis."""
+	"""Decomposed thought floating in limbo, linked back to its source document."""
 
 	text: str
 	embedding: np.ndarray
 	source: str = ""
+	doc_id: str = ""
 	created_at: float = field(default_factory=time.time)
 
 	def to_dict(self) -> dict:
@@ -103,6 +134,7 @@ class LimboThought:
 			"text": self.text,
 			"embedding": self.embedding,
 			"source": self.source,
+			"doc_id": self.doc_id,
 			"created_at": self.created_at,
 		}
 
@@ -112,6 +144,7 @@ class LimboThought:
 			text=d["text"],
 			embedding=d["embedding"],
 			source=d.get("source", ""),
+			doc_id=d.get("doc_id", ""),
 			created_at=d.get("created_at", 0.0),
 		)
 
@@ -129,6 +162,7 @@ class Graph:
 		self._profile: np.ndarray | None = None  # running mean of embeddings
 		self._registry_nodes: dict[str, int] = {}  # shard name → thought id in this graph
 		self.limbo: list[LimboThought] = []
+		self.limbo_docs: dict[str, LimboDocument] = {}
 		self.max_thoughts: int = max_thoughts  # 0 = unlimited
 		self.max_edges: int = max_edges  # 0 = unlimited
 		self.maturity_divisor: int = maturity_divisor

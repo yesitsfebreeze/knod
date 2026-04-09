@@ -24,7 +24,7 @@ from pathlib import Path
 
 import torch
 
-from .graph import Graph, Thought, Edge, LimboThought
+from .graph import Graph, Thought, Edge, LimboThought, LimboDocument
 from .gnn import ShardMPNN, ShardLayer
 
 log = logging.getLogger(__name__)
@@ -37,6 +37,7 @@ SECTION_GRAPH = 0x01
 SECTION_MODEL = 0x02
 SECTION_LIMBO = 0x03
 SECTION_REGISTRY = 0x04
+SECTION_LIMBO_DOCS = 0x05
 
 # ---- Per-shard model checkpoints (.pt) ----
 
@@ -311,6 +312,11 @@ def save_shard(graph: Graph, model: ShardMPNN, shard: ShardLayer, path: str | Pa
 		if graph._registry_nodes:
 			_write_section(f, SECTION_REGISTRY, pickle.dumps(graph._registry_nodes))
 
+		# LIMBO_DOCS section (only if non-empty)
+		if graph.limbo_docs:
+			docs_data = {doc_id: doc.to_dict() for doc_id, doc in graph.limbo_docs.items()}
+			_write_section(f, SECTION_LIMBO_DOCS, pickle.dumps(docs_data))
+
 
 def load_shard(cfg, path: str | Path, warm_start: bool = True) -> tuple[Graph, ShardMPNN, ShardLayer]:
 	"""Load graph + model + limbo from a single .shard file.
@@ -334,6 +340,7 @@ def load_shard(cfg, path: str | Path, warm_start: bool = True) -> tuple[Graph, S
 	model_bytes = None
 	limbo_data = None
 	registry_nodes = None
+	limbo_docs_data = None
 
 	for tag, payload in sections:
 		if tag == SECTION_GRAPH:
@@ -344,6 +351,8 @@ def load_shard(cfg, path: str | Path, warm_start: bool = True) -> tuple[Graph, S
 			limbo_data = pickle.loads(payload)
 		elif tag == SECTION_REGISTRY:
 			registry_nodes = pickle.loads(payload)
+		elif tag == SECTION_LIMBO_DOCS:
+			limbo_docs_data = pickle.loads(payload)
 
 	if graph_state is None:
 		raise ValueError(f"No GRAPH section in {path}")
@@ -357,6 +366,10 @@ def load_shard(cfg, path: str | Path, warm_start: bool = True) -> tuple[Graph, S
 
 	if registry_nodes:
 		graph._registry_nodes = registry_nodes
+
+	if limbo_docs_data:
+		for doc_id, ddata in limbo_docs_data.items():
+			graph.limbo_docs[doc_id] = LimboDocument.from_dict(ddata)
 
 	# Reconstruct model
 	model = ShardMPNN(cfg)

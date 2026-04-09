@@ -2,6 +2,7 @@
 
 import logging
 import threading
+import uuid
 from pathlib import Path
 from queue import Queue, Full
 
@@ -10,7 +11,7 @@ import numpy as np
 from .config import Config
 from .provider import Provider
 from .registry import Registry, store_path
-from .shard.graph import Graph, Thought, LimboThought
+from .shard.graph import Graph, Thought, LimboThought, LimboDocument
 from .shard.gnn import ShardMPNN, ShardLayer
 from .shard.trainer import GNNTrainer
 from .shard.types import GraphEvent, EventListener, ShardIndexEntry, Shard
@@ -70,6 +71,7 @@ class Handler:
 		self._poll_thread: threading.Thread | None = None
 		self._shutdown = threading.Event()
 		self._in_flight = threading.Event()
+		self._limbo_dirty = threading.Event()
 		self._listeners: dict[str, list[EventListener]] = {}
 		self._listeners_lock = threading.Lock()
 		self._retrieval_count: int = 0
@@ -205,14 +207,21 @@ class Handler:
 				self._in_flight.clear()
 
 	def _send_to_limbo(self, text: str, source: str = "", descriptor: str = "") -> int:
-		"""Decompose text into thoughts and place them directly in limbo."""
+		"""Decompose text into thoughts and place them in limbo under a shared document."""
 		article = prepare(text, source, descriptor, self.graph, self.provider, self.cfg)
 		if not article.thoughts:
 			return 0
+		doc_id = str(uuid.uuid4())
 		with self.mu:
+			self.graph.limbo_docs[doc_id] = LimboDocument(
+				id=doc_id, text=text, source=source, descriptor=descriptor
+			)
 			for pt in article.thoughts:
-				self.graph.limbo.append(LimboThought(text=pt.text, embedding=pt.embedding, source=source))
-		log.info("Limbo ← %d thoughts (source=%r)", len(article.thoughts), source or "")
+				self.graph.limbo.append(
+					LimboThought(text=pt.text, embedding=pt.embedding, source=source, doc_id=doc_id)
+				)
+		log.info("Limbo ← %d thoughts (source=%r doc=%s)", len(article.thoughts), source or "", doc_id[:8])
+		self._limbo_dirty.set()
 		return len(article.thoughts)
 
 	def ingest_sync(self, text: str, source: str = "", descriptor: str = "") -> dict:
@@ -1675,9 +1684,10 @@ class Handler:
 		return scored, chains
 
 	def _limbo_scan_loop(self):
-		"""Background: scan limbo every cfg.limbo_scan_interval seconds."""
+		"""Background: scan limbo on ingest signal or interval, whichever comes first."""
 		while not self._shutdown.is_set():
-			self._shutdown.wait(self.cfg.limbo_scan_interval)
+			self._limbo_dirty.wait(timeout=self.cfg.limbo_scan_interval)
+			self._limbo_dirty.clear()
 			if self._shutdown.is_set():
 				break
 			try:
@@ -1714,6 +1724,13 @@ class Handler:
 
 		if promoted_indices:
 			self.graph.limbo = [lt for i, lt in enumerate(self.graph.limbo) if i not in promoted_indices]
+			# Delete documents whose last thought just left limbo
+			remaining_doc_ids = {lt.doc_id for lt in self.graph.limbo}
+			orphaned = [doc_id for doc_id in self.graph.limbo_docs if doc_id not in remaining_doc_ids]
+			for doc_id in orphaned:
+				del self.graph.limbo_docs[doc_id]
+			if orphaned:
+				log.info("Limbo docs: released %d documents (all thoughts promoted)", len(orphaned))
 
 		# Upsert registry nodes for modified shards into global graph
 		for shard_name in modified_shards:
