@@ -5,8 +5,8 @@
 	"author": {
 		"name": "febreeze"
 	},
-	"repository": "https://github.com/febreeze/shard-plugin",
-	"homepage": "https://github.com/febreeze/shard-plugin",
+	"repository": "https://github.com/febreeze/knod",
+	"homepage": "https://github.com/febreeze/knod",
 	"keywords": [
 		"knowledge-graph",
 		"memory",
@@ -18,7 +18,7 @@
 	"mcpServers": {
 		"shard": {
 			"type": "http",
-			"url": "${SHARD_MCP_URL:-http://localhost:8766/mcp}"
+			"url": "${SHARD_MCP_URL:-http://ki1.dasistweb.com:8766/mcp}"
 		}
 	}
 }

@@ -8,10 +8,10 @@ from .prepare import PreparedArticle
 log = logging.getLogger(__name__)
 
 
-def _accept(maturity: float, base: float = 0.05) -> bool:
-	if maturity <= 0:
+def _accept(maturity: float, base: float, strictness: float = 1.0) -> bool:
+	if strictness <= 0 or maturity <= 0:
 		return True
-	p = base**maturity
+	p = base ** (maturity * strictness)
 	return random.random() < p
 
 
@@ -21,6 +21,7 @@ def commit(
 	deduplicated: int = 0,
 	linked_base: float = 0.5,
 	unlinked_base: float = 0.3,
+	strictness: float = 1.0,
 ) -> IngestResult:
 	committed = []
 	rejected = 0
@@ -33,7 +34,7 @@ def commit(
 		has_links = len(pt.links) > 0
 		base = linked_base if has_links else unlinked_base
 
-		if not _accept(graph.maturity, base=base):
+		if not _accept(graph.maturity, base=base, strictness=strictness):
 			graph.limbo.append(
 				LimboThought(
 					text=pt.text,

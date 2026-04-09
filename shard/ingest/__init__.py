@@ -42,6 +42,7 @@ class Ingester:
 			deduplicated=deduplicated,
 			linked_base=self.cfg.mcmc_linked_base,
 			unlinked_base=self.cfg.mcmc_unlinked_base,
+			strictness=self.cfg.strictness,
 		)
 		log.info(
 			"Ingest done → container=%r  committed=%d  deduplicated=%d  rejected=%d  "

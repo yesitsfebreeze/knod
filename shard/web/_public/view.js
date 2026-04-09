@@ -3005,6 +3005,18 @@ setupPanelSettings();
 
 // Seed the known set
 for (const n of all_nodes) knownNodeKeys.add(n.key);
+
+// Pre-load hub edges for ALL thoughts so BFS-discovered nodes connect to the outer ring
+try {
+	const meta = await (await fetch("/graph/meta")).json();
+	const knownEdgeKeys = new Set(rawEdgeData.edges.map(e => `${e.source}|${e.target}`));
+	for (const e of (meta.edges || [])) {
+		const ek = `${e.source}|${e.target}`;
+		if (!knownEdgeKeys.has(ek)) { knownEdgeKeys.add(ek); rawEdgeData.edges.push(e); }
+	}
+	resolveEdges();
+	refresh_scene_buffers();
+} catch(e) { console.warn("graph/meta prefetch failed", e); }
 const knownEdgeKeys = new Set(rawEdgeData.edges.map(e => `${e.source}|${e.target}`));
 
 // BFS wave fill: each round expands the frontier AND injects 12 random nodes
