@@ -3089,6 +3089,7 @@ async function pollForUpdates() {
 
 		if (diff.added_count > 0) {
 			const newData = await (await fetch(`/graph/thoughts?offset=${lastThoughtCount}&limit=${diff.added_count}`)).json();
+			if (diff.added_edges?.length) rawEdgeData.edges.push(...diff.added_edges);
 			if (newData.nodes?.length) appendThoughts(newData.nodes);
 			lastThoughtCount = diff.thought_count;
 			changed = true;

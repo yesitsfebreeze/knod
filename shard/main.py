@@ -170,7 +170,7 @@ def _do_serve(cfg: Config, args):
 
 		mcp_transport = args.mcp_transport
 		mcp_port = args.mcp_port or cfg.mcp_port
-		mcp_server = _mcp(handler, port=mcp_port)
+		mcp_server = _mcp(handler, host="0.0.0.0", port=mcp_port)
 
 		def run_mcp():
 			try:

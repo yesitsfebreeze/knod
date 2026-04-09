@@ -391,6 +391,7 @@ class Handler:
 			added_thought_ids = current["thought_ids"] - prev["thought_ids"]
 
 			new_thoughts = []
+			new_hub_edges = []
 			for namespaced in sorted(added_thought_ids):
 				shard_name, _, tid_str = namespaced.partition(":")
 				tid = int(tid_str)
@@ -403,6 +404,14 @@ class Handler:
 					store = shard_name
 				if t:
 					new_thoughts.append({"id": t.id, "text": t.text, "source": t.source, "store": store})
+					hub_key = f"_shard:{store}"
+					new_hub_edges.append({
+						"source": hub_key,
+						"target": f"{store}:{t.id}",
+						"weight": 0.3,
+						"reasoning": f"belongs to {store}",
+						"success_rate": 0.0,
+					})
 
 			diff = {
 				"initial": False,
@@ -410,6 +419,7 @@ class Handler:
 				"edge_count": current["edge_count"],
 				"added_thoughts": new_thoughts,
 				"added_count": len(new_thoughts),
+				"added_edges": new_hub_edges,
 				"limbo_count": current["limbo_count"],
 				"queue_size": current["queue_size"],
 				"in_flight": current["in_flight"],
@@ -755,6 +765,28 @@ class Handler:
 						"reasoning": f"belongs to {name}",
 						"success_rate": 0.0,
 					})
+		# Global hub node for thoughts in self.graph
+		if self.graph.num_thoughts > 0:
+			nodes.insert(0, {
+				"key": "_shard:global",
+				"label": "global",
+				"source": "",
+				"store": "global",
+				"type": "shard",
+				"access_count": 0,
+				"created_at": 0,
+			})
+			for t in self.graph.thoughts.values():
+				ek = ("_shard:global", str(t.id))
+				if ek not in seen:
+					seen.add(ek)
+					edges.append({
+						"source": "_shard:global",
+						"target": str(t.id),
+						"weight": 0.3,
+						"reasoning": "belongs to global",
+						"success_rate": 0.0,
+					})
 		return {"nodes": nodes, "edges": edges, "knn_edges": [], "total_thoughts": total}
 
 	def _compute_embed_proj(self) -> None:
@@ -889,6 +921,29 @@ class Handler:
 							"target": f"{prefix}{t.id}",
 							"weight": 0.3,
 							"reasoning": f"belongs to {name}",
+							"success_rate": 0.0,
+						})
+		# Global hub node for thoughts in self.graph
+		if self.graph.num_thoughts > 0:
+			nodes.insert(0, {
+				"key": "_shard:global",
+				"label": "global",
+				"source": "",
+				"store": "global",
+				"type": "shard",
+				"access_count": 0,
+				"created_at": 0,
+			})
+			for t, prefix, _ in seeds:
+				if prefix == "":
+					ek = ("_shard:global", str(t.id))
+					if ek not in seen_ek:
+						seen_ek.add(ek)
+						edges.append({
+							"source": "_shard:global",
+							"target": str(t.id),
+							"weight": 0.3,
+							"reasoning": "belongs to global",
 							"success_rate": 0.0,
 						})
 
