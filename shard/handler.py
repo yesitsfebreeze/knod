@@ -10,13 +10,13 @@ import numpy as np
 from .config import Config
 from .provider import Provider
 from .registry import Registry, store_path
-from .shard.graph import Graph, Thought
+from .shard.graph import Graph, Thought, LimboThought
 from .shard.gnn import ShardMPNN, ShardLayer
 from .shard.trainer import GNNTrainer
-from .shard.types import GraphEvent, EventListener, ShardIndexEntry, Shard, IngestResult
+from .shard.types import GraphEvent, EventListener, ShardIndexEntry, Shard
 from .shard.store import save_all, load_all, load_base_model, read_shard_metadata, save_base_model
 from .util.math import cosine
-from .ingest import Ingester
+from .ingest.prepare import prepare
 from .limbo import find_clusters, promote_cluster
 from .retrieval import (
 	cosine_scores,
@@ -60,7 +60,6 @@ class Handler:
 		self.model: ShardMPNN | None = None
 		self.shard: ShardLayer | None = None
 		self.trainer: GNNTrainer | None = None
-		self.ingester: Ingester | None = None
 		self._shards: dict[str, Shard] = {}
 		self._knn_cache: list | None = None
 		self._index: dict[str, ShardIndexEntry] = {}  # shard name → index entry
@@ -111,7 +110,6 @@ class Handler:
 				log.info("Bootstrapped base model: %s", self.cfg.base_gnn_path)
 
 		self.trainer = GNNTrainer(self.model, self.shard, self.cfg)
-		self.ingester = Ingester(self.graph, self.provider, self.cfg)
 
 		# Load registered shards
 		self._load_shards()
@@ -171,13 +169,13 @@ class Handler:
 		if best_name:
 			log.info("route_shard: routed to '%s' (sim=%.3f)", best_name, best_sim)
 		else:
-			log.debug("route_shard: no match above threshold %.3f, using global", self.cfg.shard_match_threshold)
+			log.debug("route_shard: no match above threshold %.3f, sending to limbo", self.cfg.shard_match_threshold)
 		return best_name
 
 	def enqueue(self, text: str, source: str = "", descriptor: str = "", shard_name: str | None = None) -> tuple[bool, int]:
 		"""Try to enqueue ingest. Returns (queued, pending_count).
 
-		shard_name=None means auto-route to best shard; pass "" to force global.
+		shard_name=None means auto-route to best shard; unmatched thoughts go to limbo.
 		"""
 		if self._queue is None:
 			return False, 0
@@ -195,56 +193,34 @@ class Handler:
 			text, source, descriptor, shard_name = item
 			self._in_flight.set()
 			try:
-				# None = auto-route, "" = force global
 				if shard_name is None:
 					shard_name = self.route_shard(text)
 				if shard_name and shard_name in self._shards:
 					self.ingest_into_shard(shard_name, text, source=source, descriptor=descriptor)
 				else:
-					self._ingest_sync(text, source, descriptor)
+					self._send_to_limbo(text, source, descriptor)
 			except Exception:
 				log.exception("Queue ingest failed")
 			finally:
 				self._in_flight.clear()
 
-	def _ingest_sync(self, text: str, source: str = "", descriptor: str = "") -> IngestResult:
-		result = self.ingester.ingest(text, source, descriptor)
-
-		thought_ids = [t.id for t in result.committed]
-		relinked, pairs_scanned = self._relink_thoughts(self.graph, thought_ids)
-		result.relinked = relinked
-		result.relink_pairs_scanned = pairs_scanned
-
+	def _send_to_limbo(self, text: str, source: str = "", descriptor: str = "") -> int:
+		"""Decompose text into thoughts and place them directly in limbo."""
+		article = prepare(text, source, descriptor, self.graph, self.provider, self.cfg)
+		if not article.thoughts:
+			return 0
 		with self.mu:
-			# Apply edge decay if configured
-			if self.cfg.decay_coefficient > 0:
-				self.graph.apply_edge_decay(self.cfg.decay_coefficient)
-			if result.committed and self.graph.num_edges > 0:
-				loss, _ = self.trainer.train_on_graph_with_routing(self.graph)
-				log.info("GNN training loss: %.4f", loss)
-			self.save()
-		self._fire_event(
-			GraphEvent(
-				kind="ingest_complete",
-				thoughts=self.graph.num_thoughts,
-				edges=self.graph.num_edges,
-				committed=len(result.committed),
-			)
-		)
-		return result
+			for pt in article.thoughts:
+				self.graph.limbo.append(LimboThought(text=pt.text, embedding=pt.embedding, source=source))
+		log.info("Limbo ← %d thoughts (source=%r)", len(article.thoughts), source or "")
+		return len(article.thoughts)
 
 	def ingest_sync(self, text: str, source: str = "", descriptor: str = "") -> dict:
-		"""Ingest synchronously. Returns rich stats dict."""
-		result = self._ingest_sync(text, source, descriptor)
+		"""Decompose text and place thoughts in limbo to form new shards organically."""
+		count = self._send_to_limbo(text, source, descriptor)
 		return {
-			"committed": len(result.committed),
-			"committed_thoughts": [{"id": t.id, "text": t.text[:200]} for t in result.committed],
-			"rejected_to_limbo": result.rejected,
-			"deduplicated": result.deduplicated,
-			"relinked": result.relinked,
-			"relink_pairs_scanned": result.relink_pairs_scanned,
-			"thoughts": self.graph.num_thoughts,
-			"edges": self.graph.num_edges,
+			"sent_to_limbo": count,
+			"limbo_total": len(self.graph.limbo),
 		}
 
 	def ingest(self, text: str, source: str = "", descriptor: str = "") -> str:

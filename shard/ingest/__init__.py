@@ -20,7 +20,7 @@ class Ingester:
 		self.cfg = cfg
 
 	def ingest(self, text: str, source: str = "", descriptor: str = "") -> IngestResult:
-		container = self.graph.name or "global"
+		container = self.graph.name or "(unnamed)"
 		log.info("Ingest → container=%r  source=%r  input=%d chars", container, source or "", len(text))
 
 		article = prepare(text, source, descriptor, self.graph, self.provider, self.cfg)

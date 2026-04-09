@@ -103,7 +103,7 @@ def _mcp(handler: Handler, host: str = "127.0.0.1", port: int = 8766) -> FastMCP
 	def ingest_sync(text: str, source: str = "", descriptor: str = "", shard: str = "") -> str:
 		"""Ingest text synchronously and return committed thoughts, rejection count, and dedup count. Use shard= to target a specific specialist shard, or leave empty to auto-route to the best match."""
 		target = shard or handler.route_shard(text)
-		log.info("ingest_sync: source=%s shard=%s len=%d", source or "(none)", target or "global", len(text))
+		log.info("ingest_sync: source=%s shard=%s len=%d", source or "(none)", target or "limbo", len(text))
 		log.debug("ingest_sync content: %.200s", text)
 		if target:
 			try:
