@@ -119,7 +119,7 @@ func kmeans(thoughts []Thought, k int) []cluster {
 	for j := range clusters {
 		clusters[j].centroid = centroids[j]
 	}
-	for i, t := range thoughts {
+	for _, t := range thoughts {
 		best, bestSim := 0, float32(-1)
 		for j, c := range centroids {
 			s := cosine(t.Embedding, c)

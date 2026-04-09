@@ -1097,7 +1097,7 @@ class Handler:
 					if (a.id, b.id) in existing:
 						continue
 					sim = cosine(a.embedding, b.embedding)
-					if sim >= self.cfg.similarity_threshold:
+					if sim >= 0.35:
 						pairs_to_link.append((a, b, sim))
 
 			if not pairs_to_link:
