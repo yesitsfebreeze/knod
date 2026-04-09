@@ -19,7 +19,7 @@ import numpy as np
 from ..config import Config
 from ..provider import Provider
 from ..registry import Registry, store_path
-from ..shard.graph import Graph, LimboThought
+from ..shard.graph import Graph, LimboThought, LimboDocument
 from ..shard.gnn import ShardMPNN, ShardLayer
 from ..shard.store import save_all, load_base_model
 from ..shard.types import Shard
@@ -35,6 +35,7 @@ def bootstrap_thoughts(
 	shard: ShardLayer,
 	provider: Provider,
 	cfg: Config,
+	document_context: str = "",
 ):
 	"""Link a set of thoughts to their neighbors in the graph and train GNN.
 
@@ -63,7 +64,7 @@ def bootstrap_thoughts(
 		return
 
 	article = PreparedArticle(thoughts=[pt for _, pt in prepared], source="bootstrap")
-	link(article, provider, cfg)
+	link(article, provider, cfg, document_context)
 
 	edges_added = 0
 	for tid, pt in prepared:
@@ -100,6 +101,7 @@ def promote_cluster(
 	cfg: Config,
 	registry: Registry,
 	graph_base_path: str,
+	limbo_docs: dict[str, LimboDocument] | None = None,
 ) -> str | None:
 	"""Promote a limbo cluster: try existing shard, else spawn new one.
 
@@ -108,6 +110,18 @@ def promote_cluster(
 	"""
 	texts = [lt.text for lt in cluster]
 	name, purpose = provider.suggest_store(texts)
+
+	# Collect unique source documents for richer edge reasoning
+	document_context = ""
+	if limbo_docs:
+		seen_doc_ids: set[str] = set()
+		doc_texts: list[str] = []
+		for lt in cluster:
+			if lt.doc_id and lt.doc_id not in seen_doc_ids and lt.doc_id in limbo_docs:
+				seen_doc_ids.add(lt.doc_id)
+				doc_texts.append(limbo_docs[lt.doc_id].text)
+		if doc_texts:
+			document_context = "\n\n---\n\n".join(doc_texts)
 
 	best_match = None
 	best_sim = 0.0
@@ -129,7 +143,7 @@ def promote_cluster(
 			if t:
 				new_ids.append(t.id)
 		# Bootstrap: link + train
-		bootstrap_thoughts(new_ids, shard.graph, shard.model, shard.shard, provider, cfg)
+		bootstrap_thoughts(new_ids, shard.graph, shard.model, shard.shard, provider, cfg, document_context)
 		# Refine existing edges in the target Shard (re-evaluate based on new content)
 		shard.graph.refine_edges(
 			boost=cfg.refinement_boost,
@@ -145,7 +159,7 @@ def promote_cluster(
 		)
 		return best_match
 	else:
-		return _spawn_shard(name, purpose, cluster, shards, provider, cfg, registry, graph_base_path)
+		return _spawn_shard(name, purpose, cluster, shards, provider, cfg, registry, graph_base_path, document_context)
 
 
 def _spawn_shard(
@@ -157,6 +171,7 @@ def _spawn_shard(
 	cfg: Config,
 	registry: Registry,
 	graph_base_path: str,
+	document_context: str = "",
 ) -> str:
 	"""Create a new Shard graph from a limbo cluster, link thoughts, and train."""
 	from ..shard.graph import Graph as ShardGraph
@@ -181,7 +196,7 @@ def _spawn_shard(
 			new_ids.append(t.id)
 
 	# Bootstrap: link between cluster thoughts + train GNN
-	bootstrap_thoughts(new_ids, graph, model, shard, provider, cfg)
+	bootstrap_thoughts(new_ids, graph, model, shard, provider, cfg, document_context)
 
 	store_dir = Path(graph_base_path).with_suffix("").parent
 	hashed_path = store_path(store_dir, name)

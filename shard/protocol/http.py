@@ -393,7 +393,11 @@ def http(handler: Handler) -> FastAPI:
 		messages = _sessions.get_or_create(session_id)
 		if not messages:
 			messages.append({"role": "system", "content": _build_system_prompt(handler)})
-		messages.append({"role": "user", "content": req.message})
+		message = req.message
+		if message.startswith("?"):
+			query = message[1:].strip()
+			message = f'Call `ask` with this exact query and base your answer solely on what it returns: "{query}"'
+		messages.append({"role": "user", "content": message})
 		tool_handler = ChatToolHandler(handler)
 		content, tool_calls = handler.provider.chat_with_tools(messages, tool_handler, tools=_QUERY_TOOLS)
 		messages.append({"role": "assistant", "content": content})

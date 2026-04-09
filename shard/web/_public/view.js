@@ -2663,7 +2663,7 @@ function setupAskUI() {
 		overlay.setAttribute("aria-hidden", "false");
 		document.body.classList.add("ask-open");
 		if (prefill) input.value = prefill;
-		if (!prefill && !input.value.trim()) setStatus("Type to search thoughts and query the model. Esc closes.");
+		if (!prefill && !input.value.trim()) setStatus("Type to search. Start with ? to force graph lookup. Esc closes.");
 		requestRender();
 		requestAnimationFrame(() => {
 			input.focus();
@@ -2697,13 +2697,36 @@ function setupAskUI() {
 		answerText.textContent = answerValue || "";
 	};
 
+	const renderHits = (sources) => {
+		thoughtsList.innerHTML = "";
+		if (!sources || !sources.length) return;
+		thoughts.hidden = false;
+		for (const hit of sources) {
+			const card = document.createElement("div");
+			const node = nodes.find(n => String(n.key) === String(hit.id));
+			card.className = "ask-source-item" + (node ? " is-clickable" : "");
+			card.innerHTML = `
+				<div class="ask-source-title">${escapeHtml(`thought #${hit.id}`)}</div>
+				<div class="ask-source-meta">${escapeHtml(`${hit.source || "graph"} · similarity ${typeof hit.similarity === "number" ? hit.similarity.toFixed(3) : "—"}`)}</div>
+				<div class="ask-source-text">${escapeHtml(truncateText(hit.text || "", 180))}</div>
+			`;
+			if (node) {
+				card.addEventListener("click", () => {
+					closeAsk();
+					selectNode(node, { align: true });
+				});
+			}
+			thoughtsList.appendChild(card);
+		}
+	};
+
 	const requestAnswer = async (query) => {
 		cancelPending();
 
 		const trimmed = query.trim();
 		if (trimmed.length < 2) {
 			answer.hidden = true;
-			setStatus("Type to search thoughts and query the model. Esc closes.");
+			setStatus("Type to search. Start with ? to force graph lookup. Esc closes.");
 			return;
 		}
 
@@ -2724,6 +2747,9 @@ function setupAskUI() {
 			if (seq !== askState.requestSeq) return;
 			if (payload.session_id) askState.serverSessionId = payload.session_id;
 			renderAnswer(payload?.content || payload?.answer || "No answer returned.");
+			// Extract sources from any `ask` tool call the agent made
+			const askCall = (payload?.tool_calls || []).find(tc => tc.name === "ask");
+			renderHits(askCall?.result?.sources || []);
 			setStatus("Enter to send · Esc to close");
 		} catch (error) {
 			if (controller.signal.aborted) return;

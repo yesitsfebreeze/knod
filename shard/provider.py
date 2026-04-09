@@ -287,10 +287,41 @@ class Provider:
 			return [np.array(d.embedding, dtype=np.float32) for d in sorted(resp.data, key=lambda d: d.index)]
 		raise RuntimeError("No embedding provider available")
 
-	def decompose_text(self, text: str, purpose: str = "", descriptors: dict[str, str] | None = None) -> list[str]:
+	@staticmethod
+	def _reconstruct_text(statements: list[str], chunks: list) -> str:
+		"""Reconstruct Thought.Text() by joining chunks.
+
+		Int slots are replaced by statements[i]; string slots are emitted as-is.
+		"""
+		parts = []
+		for c in chunks:
+			if isinstance(c, int) and 0 <= c < len(statements):
+				parts.append(statements[c])
+			elif isinstance(c, str):
+				parts.append(c)
+		return "".join(parts)
+
+	def decompose_text(self, text: str, purpose: str = "", descriptors: dict[str, str] | None = None) -> list[dict]:
+		"""Decompose text into thoughts using a chunk strategy.
+
+		Returns list of {"statement": str, "text": str} dicts.
+		- statement: the primary key assertion (first entry in statements[])
+		- text: Thought.Text() — full reconstructed text (statement + context); used for embedding
+		"""
 		system = (
-			"You decompose text into atomic, self-contained thoughts. "
-			"Each thought should be a single factual statement that stands alone."
+			"You decompose text into atomic, self-contained thoughts using a chunk strategy.\n\n"
+			"For each thought:\n"
+			"1. Identify the single most important statement — the key assertion. "
+			"It must be at least one full clause (~10 words). Discard fragments shorter than that.\n"
+			"2. Represent it as 'chunks': a JSON array mixing strings (literal context) "
+			"and integers (indices into 'statements').\n\n"
+			"Chunk rules:\n"
+			"- Short source section (1–2 sentences): chunks = [0]  — statement only, no context\n"
+			"- Longer source section: chunks = [\"preceding sentence. \", 0, \" following sentence.\"]"
+			"  — 1–2 sentences of context surrounding the statement\n\n"
+			"Return a JSON object: {\"thoughts\": [{\"statements\": [\"...assertion...\"], \"chunks\": [0]}, ...]}\n\n"
+			"Integer slots in chunks index into that thought's 'statements' array. "
+			"String slots are literal surrounding text copied verbatim from the source."
 		)
 		if purpose:
 			system += f"\n\nThis knowledge base focuses on: {purpose}"
@@ -304,7 +335,7 @@ class Provider:
 				{"role": "system", "content": system},
 				{
 					"role": "user",
-					"content": (f"Decompose this text into atomic thoughts. Return a JSON array of strings.\n\n{text}"),
+					"content": f"Decompose this text into atomic thoughts.\n\n{text}",
 				},
 			],
 			response_format={"type": "json_object"},
@@ -316,21 +347,49 @@ class Provider:
 				content = content[4:]
 		content = content.strip()
 		data = json.loads(content)
+		items = []
 		if isinstance(data, list):
-			return data
-		for key in ("thoughts", "items", "statements", "facts"):
-			if key in data and isinstance(data[key], list):
-				return data[key]
-		for v in data.values():
-			if isinstance(v, list):
-				return v
-		return []
+			items = data
+		else:
+			for key in ("thoughts", "items", "statements", "facts"):
+				if key in data and isinstance(data[key], list):
+					items = data[key]
+					break
+			if not items:
+				for v in data.values():
+					if isinstance(v, list):
+						items = v
+						break
+		result = []
+		for item in items:
+			if isinstance(item, str):
+				# backwards compat: plain string — only keep if long enough
+				if len(item.split()) >= 10:
+					result.append({"statement": item, "text": item})
+			elif isinstance(item, dict):
+				stmts = item.get("statements") or []
+				chunks = item.get("chunks")
+				# legacy format: {"statement": ..., "context": ...}
+				if not stmts and "statement" in item:
+					stmts = [item["statement"]]
+				if not stmts:
+					continue
+				primary = stmts[0]
+				if len(primary.split()) < 10:
+					continue
+				if chunks:
+					full_text = self._reconstruct_text(stmts, chunks)
+				else:
+					full_text = item.get("context") or primary
+				result.append({"statement": primary, "text": full_text})
+		return result
 
-	def batch_link_reason(self, thought_text: str, candidate_texts: list[str]) -> list[dict]:
+	def batch_link_reason(self, thought_text: str, candidate_texts: list[str], document_context: str = "") -> list[dict]:
 		if not candidate_texts:
 			return []
 
 		numbered = "\n".join(f"{i}: {t}" for i, t in enumerate(candidate_texts))
+		context_block = f"\n\nSource document:\n{document_context[:2000]}" if document_context else ""
 		resp = self._chat(
 			model=self.chat_model,
 			messages=[
@@ -344,7 +403,7 @@ class Provider:
 						"Only include candidates with weight > 0.1."
 					),
 				},
-				{"role": "user", "content": (f"Thought: {thought_text}\n\nCandidates:\n{numbered}")},
+				{"role": "user", "content": (f"Thought: {thought_text}\n\nCandidates:\n{numbered}{context_block}")},
 			],
 			response_format={"type": "json_object"},
 		)

@@ -1715,6 +1715,7 @@ class Handler:
 					self.cfg,
 					self.registry,
 					self.cfg.graph_path,
+					self.graph.limbo_docs,
 				)
 				promoted_indices.update(cluster_indices)
 				if shard_name:

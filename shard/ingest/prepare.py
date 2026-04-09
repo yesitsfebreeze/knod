@@ -30,12 +30,18 @@ class PreparedArticle:
 def prepare(text: str, source: str, descriptor: str, graph: Graph, provider: Provider, cfg: Config) -> PreparedArticle:
 	descriptors = graph.descriptors if not descriptor else {descriptor: graph.descriptors.get(descriptor, descriptor)}
 
-	thought_texts = provider.decompose_text(text, graph.purpose, descriptors or None)
-	log.info("Decomposed into %d thoughts", len(thought_texts))
-	for i, t in enumerate(thought_texts):
-		log.debug("  thought[%d]: %s", i, t)
+	decomposed = provider.decompose_text(text, graph.purpose, descriptors or None)
+	log.info("Decomposed into %d thoughts", len(decomposed))
+	for i, d in enumerate(decomposed):
+		log.debug("  thought[%d]: %s", i, d["statement"])
 
-	embeddings = provider.embed_texts(thought_texts)
+	# Embed over the full reconstructed text (statement + context) for richer
+	# semantic signal; store the same text as the thought body.
+	full_texts = [d["text"] for d in decomposed]
+	embeddings = provider.embed_texts(full_texts)
 
-	thoughts = [PreparedThought(text=t, embedding=e, source=source) for t, e in zip(thought_texts, embeddings)]
+	thoughts = [
+		PreparedThought(text=t, embedding=emb, source=source)
+		for t, emb in zip(full_texts, embeddings)
+	]
 	return PreparedArticle(thoughts=thoughts, source=source)

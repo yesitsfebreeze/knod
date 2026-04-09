@@ -8,10 +8,10 @@ from .prepare import PreparedArticle, PreparedThought
 log = logging.getLogger(__name__)
 
 
-def _link_one(pt: PreparedThought, provider: Provider, cfg: Config):
+def _link_one(pt: PreparedThought, provider: Provider, cfg: Config, document_context: str = ""):
 	if not pt.candidate_texts:
 		return
-	results = provider.batch_link_reason(pt.text, pt.candidate_texts)
+	results = provider.batch_link_reason(pt.text, pt.candidate_texts, document_context)
 	valid_links = [r for r in results if r["weight"] >= cfg.min_link_weight and 0 <= r["index"] < len(pt.candidate_ids)]
 	if valid_links:
 		reasoning_texts = [l["reasoning"] for l in valid_links]
@@ -28,9 +28,9 @@ def _link_one(pt: PreparedThought, provider: Provider, cfg: Config):
 			)
 
 
-def link(article: PreparedArticle, provider: Provider, cfg: Config):
+def link(article: PreparedArticle, provider: Provider, cfg: Config, document_context: str = ""):
 	with ThreadPoolExecutor(max_workers=4) as pool:
-		list(pool.map(lambda pt: _link_one(pt, provider, cfg), article.thoughts))
+		list(pool.map(lambda pt: _link_one(pt, provider, cfg, document_context), article.thoughts))
 
 	total_links = sum(len(pt.links) for pt in article.thoughts)
 	log.info("Linking: %d edges across %d thoughts", total_links, len(article.thoughts))
