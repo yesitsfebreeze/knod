@@ -19,6 +19,7 @@ from .shard.store import save_all, load_all, load_base_model, read_shard_metadat
 from .util.math import cosine
 from .ingest.prepare import prepare
 from .limbo import find_clusters, promote_cluster
+from .limbo.promote import maybe_split_shard
 from .retrieval import (
 	cosine_scores,
 	edge_scores,
@@ -124,6 +125,10 @@ class Handler:
 		# Start limbo background scan
 		self._limbo_thread = threading.Thread(target=self._limbo_scan_loop, daemon=True)
 		self._limbo_thread.start()
+
+		# Start shard split background scan
+		self._shard_split_thread = threading.Thread(target=self._shard_split_loop, daemon=True)
+		self._shard_split_thread.start()
 
 		# Record mtime so we can detect external writes to graph.shard
 		shard_file = Path(self.cfg.graph_path)
@@ -1510,8 +1515,10 @@ class Handler:
 		profile = shard.graph.profile.copy()
 		text = f"[shard:{name}] {shard.purpose}"
 
-		graph_path = self.registry.stores.get(name, {}).get("path", "<unknown>")
-		source = f"shard://{name}|{graph_path}"
+		store_entry = self.registry.stores.get(name, {})
+		graph_path = store_entry.get("path", "<unknown>")
+		origin = shard.graph.origin or store_entry.get("origin", "")
+		source = f"shard://{name}|{graph_path}" + (f"|origin:{origin}" if origin else "")
 
 		existing_tid = self.graph._registry_nodes.get(name)
 		if existing_tid and existing_tid in self.graph.thoughts:
@@ -1536,6 +1543,17 @@ class Handler:
 						target_id=neighbor.id,
 						weight=sim,
 						reasoning=f"Shard '{name}' covers this topic",
+						embedding=profile,
+					)
+			# If this is a child shard, add a directed edge to the parent's registry node
+			if origin and origin in self.graph._registry_nodes:
+				parent_tid = self.graph._registry_nodes[origin]
+				if parent_tid in self.graph.thoughts:
+					self.graph.add_edge(
+						source_id=t.id,
+						target_id=parent_tid,
+						weight=1.0,
+						reasoning=f"Shard '{name}' was split from '{origin}'",
 						embedding=profile,
 					)
 
@@ -1746,6 +1764,51 @@ class Handler:
 					detail={"shard": shard_name},
 				)
 			)
+
+	def scan_splits(self) -> dict:
+		"""Trigger an immediate shard split scan. Thread-safe public API."""
+		with self.mu:
+			self._scan_shards_for_splits()
+			self.save()
+		return {"ok": True}
+
+	def _shard_split_loop(self):
+		"""Background: periodically scan all shards for tight sub-clusters to split."""
+		while not self._shutdown.is_set():
+			self._shutdown.wait(timeout=self.cfg.shard_split_interval)
+			if self._shutdown.is_set():
+				break
+			try:
+				with self.mu:
+					self._scan_shards_for_splits()
+					self.save()
+			except Exception:
+				log.exception("Shard split scan failed")
+
+	def _scan_shards_for_splits(self):
+		"""Check every shard for tight sub-clusters; spawn child shards where found."""
+		for shard_name, shard in list(self._shards.items()):
+			spawned = maybe_split_shard(
+				shard_name,
+				shard,
+				self._shards,
+				self.provider,
+				self.cfg,
+				self.registry,
+				self.cfg.graph_path,
+			)
+			for child_name in spawned:
+				if child_name in self._shards:
+					self._upsert_shard_node(child_name, self._shards[child_name])
+				self._fire_event(
+					GraphEvent(
+						kind="shard_split",
+						thoughts=self.graph.num_thoughts,
+						edges=self.graph.num_edges,
+						committed=0,
+						detail={"parent": shard_name, "child": child_name},
+					)
+				)
 
 	def _poll_loop(self):
 		"""Background: poll registry for new stores every 5 seconds."""

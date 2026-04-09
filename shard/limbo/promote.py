@@ -157,9 +157,94 @@ def promote_cluster(
 		log.info(
 			"Promoted %d limbo thoughts to Shard '%s' (refined %d edges)", len(cluster), best_match, shard.graph.num_edges
 		)
+		# Parent taken as given no more — if the shard has grown tight sub-clusters,
+		# spawn child shards for them so they become independent routing topics.
+		maybe_split_shard(best_match, shard, shards, provider, cfg, registry, graph_base_path)
 		return best_match
 	else:
 		return _spawn_shard(name, purpose, cluster, shards, provider, cfg, registry, graph_base_path, document_context)
+
+
+def maybe_split_shard(
+	shard_name: str,
+	shard: "Shard",
+	shards: dict[str, "Shard"],
+	provider: Provider,
+	cfg: Config,
+	registry: Registry,
+	graph_base_path: str,
+) -> list[str]:
+	"""If a shard has grown tight sub-clusters, spawn new child shards for them.
+
+	A tight sub-cluster is a proper subset of the shard's thoughts whose pairwise
+	cosine similarity exceeds cfg.shard_split_threshold. Each such cluster becomes
+	its own routing topic shard, distributing load in both directions: inbound
+	(limbo → parent) and outward (parent → child specialisations).
+
+	Thoughts are NOT removed from the parent — the child is a new routing index.
+	"""
+	thoughts = list(shard.graph.thoughts.values())
+	if len(thoughts) < cfg.shard_split_min:
+		return []
+
+	embeddings = np.array([t.embedding for t in thoughts])
+	norms = np.linalg.norm(embeddings, axis=1, keepdims=True) + 1e-10
+	normed = embeddings / norms
+	sim_matrix = normed @ normed.T
+
+	n = len(thoughts)
+	visited = [False] * n
+	tight_clusters: list[list[int]] = []
+
+	for i in range(n):
+		if visited[i]:
+			continue
+		indices = [i]
+		visited[i] = True
+		stack = [i]
+		while stack:
+			cur = stack.pop()
+			for j in range(n):
+				if not visited[j] and sim_matrix[cur, j] >= cfg.shard_split_threshold:
+					visited[j] = True
+					indices.append(j)
+					stack.append(j)
+		# Only act on proper sub-clusters, not the whole shard
+		if cfg.shard_split_min <= len(indices) < n:
+			tight_clusters.append(indices)
+
+	if not tight_clusters:
+		return []
+
+	spawned: list[str] = []
+	for indices in tight_clusters:
+		cluster_thoughts = [thoughts[i] for i in indices]
+		texts = [t.text for t in cluster_thoughts]
+		name, purpose = provider.suggest_store(texts)
+
+		# Skip if this sub-cluster already has a home in another shard
+		purpose_emb = provider.embed_text(purpose)
+		best_sim = max(
+			(cosine(s.graph.profile, purpose_emb) for s in shards.values()
+			 if s.graph.profile is not None),
+			default=0.0,
+		)
+		if best_sim >= cfg.shard_match_threshold:
+			log.debug(
+				"Sub-cluster in '%s' already covered (sim=%.3f), skipping split",
+				shard_name, best_sim,
+			)
+			continue
+
+		limbo_cluster = [
+			LimboThought(text=t.text, embedding=t.embedding, source=t.source)
+			for t in cluster_thoughts
+		]
+		child_name = _spawn_shard(name, purpose, limbo_cluster, shards, provider, cfg, registry, graph_base_path, origin=shard_name)
+		log.info("Split tight sub-cluster from '%s' → new shard '%s' (%d thoughts)", shard_name, child_name, len(indices))
+		spawned.append(child_name)
+
+	return spawned
 
 
 def _spawn_shard(
@@ -172,6 +257,7 @@ def _spawn_shard(
 	registry: Registry,
 	graph_base_path: str,
 	document_context: str = "",
+	origin: str = "",
 ) -> str:
 	"""Create a new Shard graph from a limbo cluster, link thoughts, and train."""
 	from ..shard.graph import Graph as ShardGraph
@@ -182,6 +268,7 @@ def _spawn_shard(
 		max_thoughts=cfg.max_thoughts,
 		max_edges=cfg.max_edges,
 		maturity_divisor=cfg.maturity_divisor,
+		origin=origin,
 	)
 	model = ShardMPNN(cfg)
 	shard = ShardLayer(cfg.hidden_dim)
@@ -212,6 +299,7 @@ def _spawn_shard(
 		graph=graph,
 		model=model,
 		shard=shard,
+		origin=origin,
 	)
 	log.info("Spawned new Shard '%s' with %d thoughts, %d edges", name, len(cluster), graph.num_edges)
 	return name

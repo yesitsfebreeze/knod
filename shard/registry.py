@@ -69,7 +69,8 @@ class Registry:
 				continue
 			name = meta.get("name") or Path(resolved).stem
 			purpose = meta.get("purpose", "")
-			self.stores[name] = {"path": resolved, "purpose": purpose}
+			origin = meta.get("origin", "")
+			self.stores[name] = {"path": resolved, "purpose": purpose, "origin": origin}
 
 		# Prune cluster members that don't correspond to any loaded store
 		changed = False
@@ -107,14 +108,16 @@ class Registry:
 
 	def register(self, path: str, name: str = "", purpose: str = ""):
 		resolved = str(Path(path).resolve())
+		origin = ""
 		if not name or not purpose:
 			meta = self._read_metadata(resolved)
 			if meta:
 				name = name or meta.get("name") or Path(resolved).stem
 				purpose = purpose or meta.get("purpose", "")
+				origin = meta.get("origin", "")
 			else:
 				name = name or Path(resolved).stem
-		self.stores[name] = {"path": resolved, "purpose": purpose}
+		self.stores[name] = {"path": resolved, "purpose": purpose, "origin": origin}
 		self._append(resolved)
 
 	def unregister(self, name: str):

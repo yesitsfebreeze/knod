@@ -31,6 +31,7 @@ def prepare(text: str, source: str, descriptor: str, graph: Graph, provider: Pro
 	descriptors = graph.descriptors if not descriptor else {descriptor: graph.descriptors.get(descriptor, descriptor)}
 
 	decomposed = provider.decompose_text(text, graph.purpose, descriptors or None)
+	decomposed = [d for d in decomposed if d.get("text", "").strip()]
 	log.info("Decomposed into %d thoughts", len(decomposed))
 	for i, d in enumerate(decomposed):
 		log.debug("  thought[%d]: %s", i, d["statement"])

@@ -47,6 +47,9 @@ class Config:
 	mcmc_unlinked_base: float = 0.3
 	strictness: float = 1.0
 	shard_match_threshold: float = 0.8
+	shard_split_threshold: float = 0.85
+	shard_split_min: int = 5
+	shard_split_interval: float = 300.0
 	confidence_threshold: float = 0.85
 	query_routing_threshold: float = 0.3
 	traversal_depth: int = 2

@@ -33,6 +33,7 @@ class ShardIndexEntry:
 
 	name: str
 	purpose: str
+	origin: str  # parent shard name if split, else ""
 	descriptors: dict[str, str]
 	profile: np.ndarray | None
 	num_thoughts: int
@@ -42,11 +43,12 @@ class ShardIndexEntry:
 class Shard:
 	"""One shard = graph + model + shard layer."""
 
-	__slots__ = ("name", "purpose", "graph", "model", "shard")
+	__slots__ = ("name", "purpose", "origin", "graph", "model", "shard")
 
-	def __init__(self, name, purpose, graph, model, shard):
+	def __init__(self, name, purpose, graph, model, shard, origin=""):
 		self.name = name
 		self.purpose = purpose
+		self.origin = origin  # parent shard name if split, else ""
 		self.graph = graph
 		self.model = model
 		self.shard = shard

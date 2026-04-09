@@ -272,6 +272,10 @@ def http(handler: Handler) -> FastAPI:
 	def shards():
 		return handler.list_shards()
 
+	@app.post("/shards/scan-splits")
+	def scan_splits():
+		return handler.scan_splits()
+
 	@app.get("/thought/{thought_id}")
 	def get_thought(thought_id: int):
 		result = handler.explore_thought(thought_id)

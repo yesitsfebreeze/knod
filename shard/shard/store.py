@@ -49,6 +49,7 @@ def graph_to_state(graph: Graph, *, include_limbo: bool = False) -> dict:
 	state = {
 		"name": graph.name,
 		"purpose": graph.purpose,
+		"origin": graph.origin,
 		"descriptors": graph.descriptors,
 		"next_id": graph._next_id,
 		"profile": graph._profile,
@@ -64,7 +65,7 @@ def graph_to_state(graph: Graph, *, include_limbo: bool = False) -> dict:
 
 
 def graph_from_state(state: dict, *, maturity_divisor: int = 50) -> Graph:
-	graph = Graph(name=state.get("name", ""), purpose=state["purpose"])
+	graph = Graph(name=state.get("name", ""), purpose=state["purpose"], origin=state.get("origin", ""))
 	graph.descriptors = state.get("descriptors", {})
 	graph._next_id = state["next_id"]
 	graph._profile = state.get("profile")
@@ -414,6 +415,7 @@ def read_shard_metadata(path: str | Path) -> dict:
 			return {
 				"name": state.get("name", ""),
 				"purpose": state.get("purpose", ""),
+				"origin": state.get("origin", ""),
 				"descriptors": state.get("descriptors", {}),
 				"profile": state.get("profile"),
 				"num_thoughts": len(state.get("thoughts", {})),

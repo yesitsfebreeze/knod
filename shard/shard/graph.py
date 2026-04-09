@@ -151,10 +151,12 @@ class LimboThought:
 
 class Graph:
 	def __init__(
-		self, name: str = "", purpose: str = "", max_thoughts: int = 0, max_edges: int = 0, maturity_divisor: int = 50
+		self, name: str = "", purpose: str = "", max_thoughts: int = 0, max_edges: int = 0, maturity_divisor: int = 50,
+		origin: str = "",
 	):
 		self.name: str = name
 		self.purpose: str = purpose
+		self.origin: str = origin  # parent shard name if this was split off, else ""
 		self.thoughts: dict[int, Thought] = {}
 		self.edges: list[Edge] = []
 		self.descriptors: dict[str, str] = {}
