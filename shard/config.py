@@ -43,6 +43,8 @@ class Config:
 	limbo_scan_interval: float = 60.0
 	limbo_cluster_min: int = 3
 	limbo_cluster_threshold: float = 0.50
+	mcmc_linked_base: float = 0.5
+	mcmc_unlinked_base: float = 0.3
 	shard_match_threshold: float = 0.8
 	confidence_threshold: float = 0.85
 	query_routing_threshold: float = 0.3

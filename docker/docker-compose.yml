@@ -29,5 +29,6 @@ services:
       - ../config:/config:ro
       - ../shard/web:/shard/web:rw
       - ../.shard:/.shard
+      - ../.shard/shard-config:/root/.config/shard
     restart: unless-stopped
 

@@ -27,10 +27,16 @@ def _mcp(handler: Handler, host: str = "127.0.0.1", port: int = 8766) -> FastMCP
 		return json.dumps({"answer": answer, "sources": sources})
 
 	@mcp.tool()
-	def ingest(text: str, source: str = "", descriptor: str = "") -> str:
-		"""Ingest text into the knowledge graph. The text is decomposed into atomic thoughts, linked, and stored."""
-		log.info("ingest: source=%s len=%d", source or "(none)", len(text))
+	def ingest(text: str, source: str = "", descriptor: str = "", shard: str = "") -> str:
+		"""Ingest text into the knowledge graph. Use shard= to target a specific specialist shard by name instead of the global graph."""
+		log.info("ingest: source=%s shard=%s len=%d", source or "(none)", shard or "global", len(text))
 		log.debug("ingest content: %.200s", text)
+		if shard:
+			try:
+				count = handler.ingest_into_shard(shard, text, source=source, descriptor=descriptor)
+				return json.dumps({"queued": False, "shard": shard, "committed": count})
+			except KeyError:
+				return json.dumps({"error": f"Shard '{shard}' not loaded. Use list_shards to see available shards or create_shard to create one."})
 		result = handler.ingest(text, source=source, descriptor=descriptor)
 		return result
 
@@ -94,10 +100,16 @@ def _mcp(handler: Handler, host: str = "127.0.0.1", port: int = 8766) -> FastMCP
 		return json.dumps(handler.list_shards())
 
 	@mcp.tool()
-	def ingest_sync(text: str, source: str = "", descriptor: str = "") -> str:
-		"""Ingest text synchronously and return what was created: committed thoughts with IDs, rejection count, and dedup count. Use this instead of ingest when you need to verify what was stored."""
-		log.info("ingest_sync: source=%s len=%d", source or "(none)", len(text))
+	def ingest_sync(text: str, source: str = "", descriptor: str = "", shard: str = "") -> str:
+		"""Ingest text synchronously and return committed thoughts, rejection count, and dedup count. Use shard= to target a specific specialist shard."""
+		log.info("ingest_sync: source=%s shard=%s len=%d", source or "(none)", shard or "global", len(text))
 		log.debug("ingest_sync content: %.200s", text)
+		if shard:
+			try:
+				count = handler.ingest_into_shard(shard, text, source=source, descriptor=descriptor)
+				return json.dumps({"shard": shard, "committed": count})
+			except KeyError:
+				return json.dumps({"error": f"Shard '{shard}' not loaded. Use list_shards or create_shard first."})
 		result = handler.ingest_sync(text, source=source, descriptor=descriptor)
 		log.info("ingest_sync done: %d thoughts, %d edges", result.get("thoughts", 0), result.get("edges", 0))
 		return json.dumps(result)
@@ -123,6 +135,25 @@ def _mcp(handler: Handler, host: str = "127.0.0.1", port: int = 8766) -> FastMCP
 		"""Remove a thought and all its edges from the graph. Use shard= to target a specific shard, or leave empty for the global graph."""
 		log.info("forget: thought %d%s", thought_id, f" shard={shard}" if shard else "")
 		result = handler.forget(thought_id, shard_name=shard or None)
+		return json.dumps(result)
+
+	@mcp.tool()
+	def create_shard(name: str, purpose: str) -> str:
+		"""Create a new specialist shard with a given name and purpose. The shard is immediately available for ingest without restart."""
+		log.info("create_shard: name=%s", name)
+		from pathlib import Path
+		location = str(Path(handler.cfg.graph_path).parent)
+		try:
+			graph_path = handler.create_shard(name, purpose, location)
+			return json.dumps({"ok": True, "name": name, "path": graph_path})
+		except Exception as e:
+			return json.dumps({"ok": False, "error": str(e)})
+
+	@mcp.tool()
+	def register_shard(path: str) -> str:
+		"""Load and register an existing .shard file at runtime. Makes it immediately available for ingest and queries without restart."""
+		log.info("register_shard: path=%s", path)
+		result = handler.register_shard_runtime(path)
 		return json.dumps(result)
 
 	@mcp.tool()

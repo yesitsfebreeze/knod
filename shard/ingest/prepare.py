@@ -32,6 +32,8 @@ def prepare(text: str, source: str, descriptor: str, graph: Graph, provider: Pro
 
 	thought_texts = provider.decompose_text(text, graph.purpose, descriptors or None)
 	log.info("Decomposed into %d thoughts", len(thought_texts))
+	for i, t in enumerate(thought_texts):
+		log.debug("  thought[%d]: %s", i, t)
 
 	embeddings = provider.embed_texts(thought_texts)
 

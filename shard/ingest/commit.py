@@ -15,7 +15,13 @@ def _accept(maturity: float, base: float = 0.05) -> bool:
 	return random.random() < p
 
 
-def commit(article: PreparedArticle, graph: Graph, deduplicated: int = 0) -> IngestResult:
+def commit(
+	article: PreparedArticle,
+	graph: Graph,
+	deduplicated: int = 0,
+	linked_base: float = 0.5,
+	unlinked_base: float = 0.3,
+) -> IngestResult:
 	committed = []
 	rejected = 0
 	# Map article index → real thought ID for intra-batch edge resolution
@@ -25,7 +31,7 @@ def commit(article: PreparedArticle, graph: Graph, deduplicated: int = 0) -> Ing
 
 	for idx, pt in enumerate(article.thoughts):
 		has_links = len(pt.links) > 0
-		base = 0.5 if has_links else 0.05
+		base = linked_base if has_links else unlinked_base
 
 		if not _accept(graph.maturity, base=base):
 			graph.limbo.append(
@@ -41,6 +47,7 @@ def commit(article: PreparedArticle, graph: Graph, deduplicated: int = 0) -> Ing
 
 		thought = graph.add_thought(pt.text, pt.embedding, pt.source)
 		index_to_real_id[idx] = thought.id
+		log.debug("  committed thought[%d] id=%d: %s", idx, thought.id, pt.text[:80])
 
 		for link, emb in zip(pt.links, pt.link_embeddings):
 			target_id = pt.candidate_ids[link["index"]]
@@ -72,5 +79,9 @@ def commit(article: PreparedArticle, graph: Graph, deduplicated: int = 0) -> Ing
 				embedding=emb,
 			)
 
-	log.info("Committed %d/%d thoughts", len(committed), len(article.thoughts))
+	edges_added = sum(len(t.links) for t in article.thoughts)
+	log.info(
+		"Committed %d/%d thoughts, %d edges added, %d sent to limbo",
+		len(committed), len(committed) + rejected, edges_added, rejected,
+	)
 	return IngestResult(committed=committed, rejected=rejected, deduplicated=deduplicated)

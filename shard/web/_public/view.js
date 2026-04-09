@@ -324,7 +324,7 @@ let node_idx = {}, nbrs = {}, edgeAdj = {};
 let store_clr = {}, clrI = 0;
 let layout_state = { tagPos: {}, angleOf: {}, sw: Math.PI * 2 };
 let rawEdgeData = { edges: [], knn_edges: [] };
-let knownNodeKeys = new Set(); // tracks all node keys loaded so far for BFS expand
+let knownNodeKeys = new Set();
 let dimension_tags = [], dimensionControlEls = new Map();
 let dimension_weights = new Map(), dimension_vectors = new Map();
 let dimension_selection = { strength: 0, boosted: new Set(), suppressed: new Set(), deltas: new Map(), boosts: new Map(), fades: new Map() };
@@ -2976,7 +2976,7 @@ geom = buildStaticGeometry(dev);
 ({ circleMaskP, boxMaskP, triangleMaskP, circleFillP, boxFillP, triangleFillP, circleP, boxP, triangleP, edgeP, markerFillP, markerP, ub, bg } = makePipes(dev, fmt));
 bufs = buildBufs(dev);
 
-// Seed load: a few random thoughts + their edges, then BFS-expand the whole graph
+// Seed load: a few random thoughts + their edges to bootstrap the scene
 let metaData = null;
 try {
 	const res = await fetch("/graph/seed?n=12");
@@ -3005,76 +3005,81 @@ setupPanelSettings();
 
 // Seed the known set
 for (const n of all_nodes) knownNodeKeys.add(n.key);
+const knownEdgeKeys = new Set(rawEdgeData.edges.map(e => `${e.source}|${e.target}`));
 
-// One BFS chain per seed node — all run in parallel, share knownNodeKeys to avoid duplicates
-async function bfsChain(startKey) {
-	let frontier = [startKey];
-	while (frontier.length > 0) {
-		let data;
-		try {
-			data = await (await fetch("/graph/expand", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
+// BFS wave fill: each round expands the frontier AND injects 12 random nodes
+// so isolated/weakly-connected nodes are picked up alongside the spreading wave
+(async function bfsFill() {
+	const total = metaData?.total_thoughts ?? 0;
+	let frontier = (metaData?.seed_keys || []).filter(k => !k.startsWith('_'));
+
+	let stuckRounds = 0;
+	while (thought_nodes.length < total) {
+		// When stuck, request n=total so server returns the full pool — guarantees unknowns are returned
+		const seedN = stuckRounds >= 3 ? total : 12;
+		const reqs = [fetch(`/graph/seed?n=${seedN}`).then(r => r.json()).catch(() => null)];
+		if (frontier.length) {
+			reqs.push(fetch('/graph/expand', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({ keys: frontier, known: [...knownNodeKeys] }),
-			})).json();
-		} catch (e) {
-			console.error("BFS chain error:", e);
-			break;
+			}).then(r => r.json()).catch(() => null));
 		}
-		rawEdgeData.edges.push(...(data.edges || []));
-		// Claim new nodes immediately before other chains see them
-		const newNodes = (data.nodes || []).filter(n => !knownNodeKeys.has(n.key));
-		newNodes.forEach(n => knownNodeKeys.add(n.key));
-		if (newNodes.length) {
-			appendThoughts(newNodes);
-			frontier = newNodes.map(n => n.key);
-		} else {
-			resolveEdges();
-			frontier = [];
+
+		const results = await Promise.all(reqs);
+		const nextFrontier = [];
+		let anyNew = false, newEdges = false;
+
+		for (const data of results) {
+			if (!data) continue;
+			for (const e of (data.edges || [])) {
+				const ek = `${e.source}|${e.target}`;
+				if (!knownEdgeKeys.has(ek)) { knownEdgeKeys.add(ek); rawEdgeData.edges.push(e); newEdges = true; }
+			}
+			const newNodes = (data.nodes || []).filter(n => n.type !== 'shard' && !knownNodeKeys.has(n.key));
+			if (newNodes.length) {
+				newNodes.forEach(n => knownNodeKeys.add(n.key));
+				appendThoughts(newNodes); // resolveEdges + refresh inside
+				nextFrontier.push(...newNodes.map(n => n.key));
+				anyNew = true;
+			}
 		}
+
+		if (!anyNew && newEdges) { resolveEdges(); refresh_scene_buffers(); }
 		document.getElementById("s-nodes").textContent = thought_nodes.length;
 		document.getElementById("s-edges").textContent = edges.length;
+
+		if (!anyNew) { if (++stuckRounds > 5) break; } else stuckRounds = 0;
+		frontier = nextFrontier;
 		await new Promise(r => setTimeout(r, 0)); // yield to renderer
 	}
-}
+})();
 
-(async function bfsLoad() {
-	// Fire one chain per seed in parallel — they race across the graph simultaneously
-	await Promise.all(metaData.nodes.map(n => bfsChain(n.key)));
+// Random KNN fill: load knn edges bit by bit until all are present
+(async function randomKnnFill() {
+	const BATCH_N = 24;
+	let total = null;
+	const knownKnnKeys = new Set();
 
-	// Final sweep: pick up any thoughts unreachable by edges (isolated nodes)
-	const total = metaData?.total_thoughts ?? 0;
-	if (thought_nodes.length < total) {
-		const BATCH = 200;
-		const offsets = [];
-		for (let off = 0; off < total; off += BATCH) offsets.push(off);
-		await Promise.all(offsets.map(off =>
-			fetch(`/graph/thoughts?offset=${off}&limit=${BATCH}`)
-				.then(r => r.json())
-				.then(batch => {
-					if (batch.nodes?.length) {
-						appendThoughts(batch.nodes);
-						batch.nodes.forEach(n => knownNodeKeys.add(n.key));
-						document.getElementById("s-nodes").textContent = thought_nodes.length;
-						document.getElementById("s-edges").textContent = edges.length;
-					}
-				})
-				.catch(e => console.error("Thought sweep error:", e))
-		));
-	}
-
-	// Load KNN edges — cross-shard similarity links that BFS can't discover
-	fetch("/graph/knn_edges")
-		.then(r => r.json())
-		.then(data => {
-			if (data.knn_edges?.length) {
-				rawEdgeData.knn_edges.push(...data.knn_edges);
+	while (total === null || knownKnnKeys.size < total) {
+		try {
+			const data = await fetch(`/graph/knn_edges?n=${BATCH_N}`).then(r => r.json());
+			if (total === null) total = data.total_knn_edges ?? 0;
+			if (!total) break;
+			const newEdges = (data.knn_edges || []).filter(e => !knownKnnKeys.has(`${e.source}|${e.target}`));
+			newEdges.forEach(e => { knownKnnKeys.add(`${e.source}|${e.target}`); rawEdgeData.knn_edges.push(e); });
+			if (newEdges.length) {
 				resolveEdges();
 				refresh_scene_buffers();
 				document.getElementById("s-edges").textContent = edges.length;
 			}
-		})
-		.catch(e => console.error("KNN edges error:", e));
+			if (!newEdges.length && knownKnnKeys.size >= total) break;
+		} catch (e) {
+			console.error("KNN edges error:", e);
+			break;
+		}
+		await new Promise(r => setTimeout(r, 0)); // yield to renderer
+	}
 })();
 
 // ---- live poll for updates ----

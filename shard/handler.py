@@ -62,6 +62,7 @@ class Handler:
 		self.trainer: GNNTrainer | None = None
 		self.ingester: Ingester | None = None
 		self._shards: dict[str, Shard] = {}
+		self._knn_cache: list | None = None
 		self._index: dict[str, ShardIndexEntry] = {}  # shard name → index entry
 		self.mu = threading.Lock()
 		self._queue: Queue | None = None
@@ -474,7 +475,59 @@ class Handler:
 		if cluster:
 			self.registry.add_to_cluster(cluster, name)
 
+		# Load the new shard into the running handler immediately
+		self._shards[name] = Shard(name=name, purpose=purpose, graph=graph, model=model, shard=shard)
+		self._index[name] = ShardIndexEntry(
+			name=name,
+			purpose=purpose,
+			descriptors={},
+			profile=None,
+			num_thoughts=0,
+			num_edges=0,
+		)
+
 		return graph_path
+
+	def register_shard_runtime(self, path: str) -> dict:
+		"""Register and load an existing .shard file at runtime without restart."""
+		from pathlib import Path as _Path
+		p = _Path(path).resolve()
+		if not p.exists():
+			return {"ok": False, "error": f"Path not found: {path}"}
+		try:
+			self.registry.register(str(p))
+			# Find the name that was registered
+			name = None
+			for n, entry in self.registry.stores.items():
+				if _Path(entry["path"]).resolve() == p:
+					name = n
+					break
+			if name is None:
+				return {"ok": False, "error": "Registered but could not resolve name"}
+			entry = self.registry.stores[name]
+			base = _Path(entry["path"]).with_suffix("")
+			graph, model, shard_layer = load_all(self.cfg, base)
+			self._shards[name] = Shard(
+				name=name,
+				purpose=entry.get("purpose", "") or graph.purpose,
+				graph=graph,
+				model=model,
+				shard=shard_layer,
+			)
+			self._index[name] = ShardIndexEntry(
+				name=name,
+				purpose=graph.purpose,
+				descriptors=dict(graph.descriptors),
+				profile=graph.profile.copy() if graph.profile is not None else None,
+				num_thoughts=graph.num_thoughts,
+				num_edges=graph.num_edges,
+			)
+			self._upsert_shard_node(name, self._shards[name])
+			log.info("Runtime-registered shard '%s' (%d thoughts)", name, graph.num_thoughts)
+			return {"ok": True, "name": name, "thoughts": graph.num_thoughts}
+		except Exception as e:
+			log.exception("Failed to runtime-register shard: %s", path)
+			return {"ok": False, "error": str(e)}
 
 	def ingest_into_shard(
 		self,
@@ -489,6 +542,12 @@ class Handler:
 			raise KeyError(f"Shard '{shard_name}' not loaded")
 		ingester = Ingester(s.graph, self.provider, self.cfg)
 		result = ingester.ingest(text, source=source, descriptor=descriptor)
+		if result.committed:
+			entry = self.registry.stores.get(shard_name, {})
+			graph_path = entry.get("path")
+			if graph_path:
+				base = Path(graph_path).with_suffix("")
+				save_all(s.graph, s.model, s.shard, base)
 		return len(result.committed)
 
 	def link_thoughts(
@@ -693,48 +752,54 @@ class Handler:
 
 		return {"nodes": nodes, "edges": edges, "knn_edges": self.graph_knn_edges()["knn_edges"]}
 
-	def graph_knn_edges(self, k: int = 3) -> dict:
+	def graph_knn_edges(self, k: int = 3, n: int | None = None) -> dict:
 		"""Compute k-nearest-neighbour edges across all thoughts (global + shards).
 
 		Cross-shard KNN edges are the only way to visually connect thoughts that
-		live in different specialist graphs.  Called by graph_full and exposed as
-		its own endpoint so the BFS loader can fetch them without re-loading all
-		nodes.
+		live in different specialist graphs.  Result is cached after the first call.
+		Pass n to get a random sample of n edges (for incremental loading).
 		"""
-		from .util.math import cosine
+		import random
 
-		all_thoughts: list[tuple[str, np.ndarray]] = []
-		for t in self.graph.thoughts.values():
-			if t.embedding is not None and len(t.embedding) > 0:
-				all_thoughts.append((str(t.id), np.asarray(t.embedding, dtype=float).ravel()))
-		for name, shard in self._shards.items():
-			for t in shard.graph.thoughts.values():
+		if self._knn_cache is None:
+			from .util.math import cosine
+
+			all_thoughts: list[tuple[str, np.ndarray]] = []
+			for t in self.graph.thoughts.values():
 				if t.embedding is not None and len(t.embedding) > 0:
-					all_thoughts.append((f"{name}:{t.id}", np.asarray(t.embedding, dtype=float).ravel()))
+					all_thoughts.append((str(t.id), np.asarray(t.embedding, dtype=float).ravel()))
+			for name, shard in self._shards.items():
+				for t in shard.graph.thoughts.values():
+					if t.embedding is not None and len(t.embedding) > 0:
+						all_thoughts.append((f"{name}:{t.id}", np.asarray(t.embedding, dtype=float).ravel()))
 
-		knn_edges = []
-		seen: set[tuple[str, str]] = set()
-		k = min(k, len(all_thoughts) - 1)
-		if len(all_thoughts) > 1:
-			for i, (key_i, emb_i) in enumerate(all_thoughts):
-				sims = sorted(
-					((cosine(emb_i, emb_j), key_j) for j, (key_j, emb_j) in enumerate(all_thoughts) if j != i),
-					key=lambda x: -x[0],
-				)
-				for sim, key_j in sims[:k]:
-					if (key_i, key_j) not in seen and (key_j, key_i) not in seen:
-						seen.add((key_i, key_j))
-						knn_edges.append({
-							"source": key_i,
-							"target": key_j,
-							"weight": round(max(0.0, sim), 3),
-							"reasoning": "embedding similarity",
-							"success_rate": 0.0,
-							"traversal_count": 0,
-							"created_at": 0,
-							"type": "knn",
-						})
-		return {"knn_edges": knn_edges}
+			knn_edges = []
+			seen: set[tuple[str, str]] = set()
+			eff_k = min(k, len(all_thoughts) - 1)
+			if len(all_thoughts) > 1:
+				for i, (key_i, emb_i) in enumerate(all_thoughts):
+					sims = sorted(
+						((cosine(emb_i, emb_j), key_j) for j, (key_j, emb_j) in enumerate(all_thoughts) if j != i),
+						key=lambda x: -x[0],
+					)
+					for sim, key_j in sims[:eff_k]:
+						if (key_i, key_j) not in seen and (key_j, key_i) not in seen:
+							seen.add((key_i, key_j))
+							knn_edges.append({
+								"source": key_i,
+								"target": key_j,
+								"weight": round(max(0.0, sim), 3),
+								"reasoning": "embedding similarity",
+								"success_rate": 0.0,
+								"traversal_count": 0,
+								"created_at": 0,
+								"type": "knn",
+							})
+			self._knn_cache = knn_edges
+
+		total = len(self._knn_cache)
+		sample = random.sample(self._knn_cache, min(n, total)) if n is not None else self._knn_cache
+		return {"knn_edges": sample, "total_knn_edges": total}
 
 	def graph_meta(self) -> dict:
 		"""Lightweight snapshot: shard hub nodes + total thought count for fast initial render."""

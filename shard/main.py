@@ -203,12 +203,18 @@ def _do_serve(cfg: Config, args):
 		signal.signal(signal.SIGTERM, shutdown_handler)
 
 		log.info("http: starting on :%d", cfg.http_port)
+		shard_log_level = "DEBUG" if args.verbose else "INFO"
 		log_config = {
 			"version": 1,
 			"disable_existing_loggers": False,
-			"formatters": {"default": {"()": "logging.Formatter", "fmt": "%(levelname)s %(message)s"}},
+			"formatters": {
+				"default": {"()": "logging.Formatter", "fmt": "%(asctime)s %(levelname)s %(name)s: %(message)s"},
+			},
 			"handlers": {"default": {"class": "logging.StreamHandler", "formatter": "default", "stream": "ext://sys.stderr"}},
 			"root": {"level": "WARNING", "handlers": ["default"]},
+			"loggers": {
+				"shard": {"level": shard_log_level, "handlers": ["default"], "propagate": False},
+			},
 		}
 		uvicorn.run(_http, host="0.0.0.0", port=cfg.http_port, log_level="warning", log_config=log_config)
 	else:
